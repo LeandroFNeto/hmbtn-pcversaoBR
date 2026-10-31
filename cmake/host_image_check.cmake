@@ -1,0 +1,45 @@
+# Checks hmbtn-host.exe after linking: it must be large-address-aware, and its image must
+# end below 0x01000000 so a 24-bit ordering-table link still names any static packet.
+# Usage: cmake -DIMAGE=<exe> -P host_image_check.cmake
+
+function(_read_u32 file offset out)
+    file(READ ${file} hex OFFSET ${offset} LIMIT 4 HEX)
+    string(SUBSTRING ${hex} 0 2 b0)
+    string(SUBSTRING ${hex} 2 2 b1)
+    string(SUBSTRING ${hex} 4 2 b2)
+    string(SUBSTRING ${hex} 6 2 b3)
+    math(EXPR value "0x${b3}${b2}${b1}${b0}" OUTPUT_FORMAT DECIMAL)
+    set(${out} ${value} PARENT_SCOPE)
+endfunction()
+
+function(_read_u16 file offset out)
+    file(READ ${file} hex OFFSET ${offset} LIMIT 2 HEX)
+    string(SUBSTRING ${hex} 0 2 b0)
+    string(SUBSTRING ${hex} 2 2 b1)
+    math(EXPR value "0x${b1}${b0}" OUTPUT_FORMAT DECIMAL)
+    set(${out} ${value} PARENT_SCOPE)
+endfunction()
+
+_read_u32(${IMAGE} 60 pe)
+math(EXPR characteristics_offset "${pe} + 22")
+math(EXPR image_base_offset "${pe} + 24 + 28")
+math(EXPR size_of_image_offset "${pe} + 24 + 56")
+_read_u16(${IMAGE} ${characteristics_offset} characteristics)
+_read_u32(${IMAGE} ${image_base_offset} image_base)
+_read_u32(${IMAGE} ${size_of_image_offset} size_of_image)
+
+math(EXPR large_address_aware "${characteristics} & 0x20")
+math(EXPR image_end "${image_base} + ${size_of_image}")
+math(EXPR image_base_hex "${image_base}" OUTPUT_FORMAT HEXADECIMAL)
+math(EXPR image_end_hex "${image_end}" OUTPUT_FORMAT HEXADECIMAL)
+message(STATUS "hmbtn-host image ${image_base_hex}..${image_end_hex}, large-address-aware=${large_address_aware}")
+
+if(large_address_aware EQUAL 0)
+    message(FATAL_ERROR "hmbtn-host is not large-address-aware; the PS1 RAM window cannot be mapped")
+endif()
+if(NOT image_base EQUAL 4194304)
+    message(FATAL_ERROR "hmbtn-host image base is ${image_base_hex}, expected 0x400000")
+endif()
+if(image_end GREATER_EQUAL 16777216)
+    message(FATAL_ERROR "hmbtn-host image ends at ${image_end_hex}, at or past 0x1000000")
+endif()

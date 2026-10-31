@@ -1,0 +1,34 @@
+---
+description: Keep the README's PC port status (solved vs. missing) in sync with the work
+alwaysApply: true
+---
+
+# README: status do port
+
+O `README.md` tem duas listas que precisam refletir o estado real do port para PC:
+**"Já resolvido"** (tabela por fase/change) e **"Ainda falta"** (lista).
+
+Atualize as duas, no mesmo turno, sempre que:
+
+- um change do OpenSpec (`openspec/changes/pc-port-*`) tiver todas as tarefas marcadas, for arquivado, ou ganhar uma tarefa deixada em aberto;
+- uma limitação for descoberta, contornada ou resolvida (ex.: algo que ficou "fora do escopo");
+- o jeito de compilar ou rodar o host mudar (flags do CMake, requisitos, variáveis `HMBTN_*`, teclas).
+
+Como atualizar:
+
+- Mova o item de "Ainda falta" para "Já resolvido" só quando ele foi verificado (build, checagem ou captura), não quando só foi planejado.
+- Na tabela, cite o change e descreva em uma frase o que funciona do ponto de vista de quem joga ou compila.
+- Em "Ainda falta", diga o que falta e onde está registrado (change e tarefa), se houver.
+- Mantenha o resto do README (texto do fork, build do PS1) como está.
+
+Exemplo de item resolvido:
+
+```markdown
+| 8 | `pc-port-audio` | SPU virtual, ADPCM (VAG), ADSR e efeitos sonoros pelo SDL2 |
+```
+
+Exemplo de pendência:
+
+```markdown
+- **Build no Linux**: `pc-port-psyq-stubs` tarefa 5.2 aberta.
+```

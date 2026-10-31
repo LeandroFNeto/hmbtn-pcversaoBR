@@ -1,6 +1,13 @@
 # Harvest Moon: Back to Nature (SLUS_011.15), the EXE and its overlays.
 cmake_minimum_required(VERSION 3.20)
 
+option(HMBTN_HOST "Build for PC Host" OFF)
+if(HMBTN_HOST)
+    project(hmbtn-host C)
+    include(cmake/host.cmake)
+    return()
+endif()
+
 if(NOT CMAKE_TOOLCHAIN_FILE)
     set(CMAKE_TOOLCHAIN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/psx-toolchain.cmake)
 endif()
