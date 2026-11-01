@@ -157,6 +157,7 @@ int LoadImage(RECT *rect, u_long *p) {
 }
 
 int StoreImage(RECT *rect, u_long *p) {
+    gpu_refresh_draw_overlap(rect->x, rect->y, rect->w, rect->h);
     vram_store(rect->x, rect->y, rect->w, rect->h, (uint16_t *)p);
     return 0;
 }

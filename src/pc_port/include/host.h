@@ -28,6 +28,9 @@ void host_debug_reset_game_drawn(void);
 int host_vblank_count(void);
 const int *host_vblank_counter(void);
 
+/* 1 when HMBTN_TRACE=1: scene changes and memory card calls go to the log. */
+int host_tracing(void);
+
 /* Frame-loop checks for HMBTN_SELFTEST=1. Returns 0 when all pass. */
 int host_frame_self_check(void);
 

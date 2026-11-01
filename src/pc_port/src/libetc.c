@@ -90,10 +90,23 @@ static void pace(void) {
     }
 }
 
+/* main.c's scene id, logged when it changes under HMBTN_TRACE=1. */
+extern int main_scene;
+
+static void trace_scene(void) {
+    static int last_scene = -1;
+
+    if (host_tracing() && main_scene != last_scene) {
+        SDL_Log("trace: vblank %d scene %d -> %d", vblank_count, last_scene, main_scene);
+        last_scene = main_scene;
+    }
+}
+
 static void host_vblank(void) {
     int drew;
 
     vblank_count++;
+    trace_scene();
     drew = host_render_vblank();
     poll_events();
     host_input_sample();

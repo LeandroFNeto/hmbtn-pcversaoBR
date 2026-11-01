@@ -5,6 +5,8 @@
 #include <GL/gl.h>
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 struct SDL_Window *host_window;
 jmp_buf host_exit_jmp;
@@ -26,6 +28,17 @@ void host_log_open(const char *path) {
     }
 }
 
+int host_tracing(void) {
+    static int tracing = -1;
+    const char *env;
+
+    if (tracing < 0) {
+        env = getenv("HMBTN_TRACE");
+        tracing = env != NULL && strcmp(env, "1") == 0;
+    }
+    return tracing;
+}
+
 void host_quit(void) {
     longjmp(host_exit_jmp, 1);
 }
@@ -40,6 +53,7 @@ void host_clear(void) {
 }
 
 void host_present(void) {
+    gpu_trace_frame();
     SDL_GL_SwapWindow(host_window);
     host_clear();
 }

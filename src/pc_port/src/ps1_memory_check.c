@@ -1,6 +1,7 @@
 /* Startup checks for the PS1 address space and the 24-bit link rule. */
 
 #include <ps1_memory.h>
+#include <ps1_null.h>
 
 #include <SDL.h>
 #include <libgpu.h>
@@ -15,6 +16,24 @@ static int check(int ok, const char *what) {
         SDL_Log("PS1 memory check failed: %s", what);
     }
     return ok ? 0 : 1;
+}
+
+/* The kernel's words in low RAM, and null pointers leading to them. */
+static int check_low_ram(void) {
+    volatile const uint32_t *low = (volatile const uint32_t *)(uintptr_t)PS1_RAM_BASE;
+    uint32_t *none = NULL;
+    uint32_t word = 0;
+    int failed;
+
+    failed = check(low[0] == 0x00000003u && low[1] == 0x275A0C80u && low[2] == 0x03400008u && low[3] == 0,
+                   "0x80000000..0x8000000F hold the kernel's garbage area");
+    failed |= check(low[0x60 / 4] == 2, "0x80000060 holds the RAM size, 2");
+    failed |= check((uintptr_t)PS1_NULL_PTR(none) == PS1_RAM_BASE, "a null pointer leads to 0x80000000");
+    failed |= check(PS1_NULL_PTR(&word) == &word, "a non-null pointer passes through");
+    if (!failed) {
+        SDL_Log("PS1 memory check ok: low RAM holds the kernel's values, null pointers lead to it");
+    }
+    return failed;
 }
 
 int ps1_memory_self_check(void) {
@@ -70,5 +89,6 @@ int ps1_memory_self_check(void) {
         table[i] = 0;
     }
 
+    failed |= check_low_ram();
     return failed;
 }

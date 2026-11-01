@@ -30,13 +30,16 @@ typedef struct {
 void InitGeom(void);
 void SetGeomOffset(long ofx, long ofy);
 void SetGeomScreen(long h);
+void SetFarColor(long rfc, long gfc, long bfc);
+void SetFogNear(long a, long h);
 long ratan2(long y, long x);
-long csqrt(long a);
+int csqrt(int a);
 long SquareRoot0(long a);
 long SquareRoot12(long a);
 int rsin(int a);
 int rcos(int a);
 MATRIX *RotMatrix(SVECTOR *r, MATRIX *m);
+MATRIX *RotMatrixZXY(SVECTOR *r, MATRIX *m);
 MATRIX *RotMatrixX(long r, MATRIX *m);
 MATRIX *RotMatrixY(long r, MATRIX *m);
 MATRIX *RotMatrixZ(long r, MATRIX *m);
@@ -47,8 +50,15 @@ MATRIX *MulMatrix0(MATRIX *m0, MATRIX *m1, MATRIX *m2);
 MATRIX *CompMatrix(MATRIX *m0, MATRIX *m1, MATRIX *m2);
 void SetRotMatrix(MATRIX *m);
 void SetTransMatrix(MATRIX *m);
+void PushMatrix(void);
+void PopMatrix(void);
 VECTOR *ApplyMatrix(MATRIX *m, SVECTOR *v0, VECTOR *v1);
 VECTOR *ApplyMatrixLV(MATRIX *m, VECTOR *v0, VECTOR *v1);
+void RotTrans(SVECTOR *v0, VECTOR *v1, long *flag);
 long RotTransPers(SVECTOR *v0, long *sxy, long *p, long *flag);
+void OuterProduct0(VECTOR *v0, VECTOR *v1, VECTOR *v2);
+long VectorNormal(VECTOR *v0, VECTOR *v1);
+long VectorNormalS(VECTOR *v0, SVECTOR *v1);
+long VectorNormalSS(SVECTOR *v0, SVECTOR *v1);
 
 #endif

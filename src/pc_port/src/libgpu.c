@@ -5,12 +5,16 @@
 #include <libgpu.h>
 #include <ps1_memory.h>
 #include <vram.h>
+#include <farm_state.h>
+#include <host.h>
 
 #include <SDL.h>
 #include <GL/gl.h>
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef APIENTRY
@@ -53,6 +57,7 @@ typedef void(APIENTRY *PFN_glVertexAttribPointer)(GLuint, GLint, GLenum, GLboole
 typedef GLint(APIENTRY *PFN_glGetAttribLocation)(GLuint, const GLchar *);
 typedef GLint(APIENTRY *PFN_glGetUniformLocation)(GLuint, const GLchar *);
 typedef void(APIENTRY *PFN_glUniform1i)(GLint, GLint);
+typedef void(APIENTRY *PFN_glUniform1f)(GLint, GLfloat);
 typedef void(APIENTRY *PFN_glBlendEquation)(GLenum);
 
 static PFN_glCreateShader p_glCreateShader;
@@ -77,6 +82,7 @@ static PFN_glVertexAttribPointer p_glVertexAttribPointer;
 static PFN_glGetAttribLocation p_glGetAttribLocation;
 static PFN_glGetUniformLocation p_glGetUniformLocation;
 static PFN_glUniform1i p_glUniform1i;
+static PFN_glUniform1f p_glUniform1f;
 static PFN_glBlendEquation p_glBlendEquation;
 
 static GLuint gpu_program;
@@ -113,6 +119,25 @@ static int st_page_y;
 static int st_depth = 4;
 static int st_abr;
 
+/* Texture window in pixels (mask and offset). Mask 0 leaves the coordinate alone.
+ * It persists across DrawOTag, matching the GPU register. */
+static int tw_mask_x;
+static int tw_mask_y;
+static int tw_off_x;
+static int tw_off_y;
+static GLint loc_tw_mask_x = -1;
+static GLint loc_tw_mask_y = -1;
+static GLint loc_tw_off_x = -1;
+static GLint loc_tw_off_y = -1;
+
+/* The draw environment's clip, where this frame's pixels live in VRAM. */
+static int clip_x;
+static int clip_y;
+static int clip_w = 320;
+static int clip_h = 240;
+static unsigned char refresh_rgba[2048 * 4];
+static uint16_t refresh_words[320];
+
 /* A TILE (0x60) the walker must skip, then the flat quad that is drawn. */
 static TILE demo_skip;
 static POLY_F4 demo_quad;
@@ -144,6 +169,10 @@ static const char *VERT_SRC =
 static const char *FRAG_SRC =
     "#version 120\n"
     "uniform sampler2D uVram;\n"
+    "uniform float uTwMaskX;\n"
+    "uniform float uTwMaskY;\n"
+    "uniform float uTwOffX;\n"
+    "uniform float uTwOffY;\n"
     "varying vec3 vColor;\n"
     "varying vec2 vUV;\n"
     "varying vec3 vPage;\n"
@@ -153,11 +182,23 @@ static const char *FRAG_SRC =
     "    vec4 t = texture2D(uVram, (mod(floor(p), vec2(1024.0, 512.0)) + 0.5) / vec2(1024.0, 512.0));\n"
     "    return floor(t.r * 255.0 + 0.5) + floor(t.a * 255.0 + 0.5) * 256.0;\n"
     "}\n"
+    "float tw_bit(float value, float bit) {\n"
+    "    return mod(floor(value / bit), 2.0);\n"
+    "}\n"
+    "float tw_axis(float c, float mask, float off) {\n"
+    "    c = mod(floor(c), 256.0);\n"
+    "    c = c - tw_bit(c, 8.0) * 8.0 * tw_bit(mask, 8.0) + tw_bit(off, 8.0) * 8.0 * tw_bit(mask, 8.0);\n"
+    "    c = c - tw_bit(c, 16.0) * 16.0 * tw_bit(mask, 16.0) + tw_bit(off, 16.0) * 16.0 * tw_bit(mask, 16.0);\n"
+    "    c = c - tw_bit(c, 32.0) * 32.0 * tw_bit(mask, 32.0) + tw_bit(off, 32.0) * 32.0 * tw_bit(mask, 32.0);\n"
+    "    c = c - tw_bit(c, 64.0) * 64.0 * tw_bit(mask, 64.0) + tw_bit(off, 64.0) * 64.0 * tw_bit(mask, 64.0);\n"
+    "    c = c - tw_bit(c, 128.0) * 128.0 * tw_bit(mask, 128.0) + tw_bit(off, 128.0) * 128.0 * tw_bit(mask, 128.0);\n"
+    "    return c;\n"
+    "}\n"
     "void main() {\n"
     "    vec3 rgb = vColor;\n"
     "    float stp = 1.0;\n"
     "    if (vPage.z > 0.5) {\n"
-    "        vec2 uv = mod(floor(vUV), 256.0);\n"
+    "        vec2 uv = vec2(tw_axis(vUV.x, uTwMaskX, uTwOffX), tw_axis(vUV.y, uTwMaskY, uTwOffY));\n"
     "        float c;\n"
     "        if (vPage.z < 5.0) {\n"
     "            float w = vram_word(vec2(vPage.x + floor(uv.x / 4.0), vPage.y + uv.y));\n"
@@ -256,6 +297,7 @@ int gpu_gl_init(void) {
     p_glGetAttribLocation = (PFN_glGetAttribLocation)load_proc("glGetAttribLocation", &missing);
     p_glGetUniformLocation = (PFN_glGetUniformLocation)load_proc("glGetUniformLocation", &missing);
     p_glUniform1i = (PFN_glUniform1i)load_proc("glUniform1i", &missing);
+    p_glUniform1f = (PFN_glUniform1f)load_proc("glUniform1f", &missing);
     p_glBlendEquation = (PFN_glBlendEquation)load_proc("glBlendEquation", &missing);
     if (missing) {
         return -1;
@@ -292,6 +334,14 @@ int gpu_gl_init(void) {
     }
     p_glUseProgram(gpu_program);
     p_glUniform1i(p_glGetUniformLocation(gpu_program, "uVram"), 0);
+    loc_tw_mask_x = p_glGetUniformLocation(gpu_program, "uTwMaskX");
+    loc_tw_mask_y = p_glGetUniformLocation(gpu_program, "uTwMaskY");
+    loc_tw_off_x = p_glGetUniformLocation(gpu_program, "uTwOffX");
+    loc_tw_off_y = p_glGetUniformLocation(gpu_program, "uTwOffY");
+    if (loc_tw_mask_x < 0 || loc_tw_mask_y < 0 || loc_tw_off_x < 0 || loc_tw_off_y < 0) {
+        SDL_Log("shader texture-window uniforms missing");
+        return -1;
+    }
     p_glGenBuffers(1, &gpu_vbo);
 
     glGenTextures(1, &gpu_vram_tex);
@@ -353,6 +403,10 @@ static void flush_verts(void) {
     }
     upload_vram();
     p_glUseProgram(gpu_program);
+    p_glUniform1f(loc_tw_mask_x, (float)tw_mask_x);
+    p_glUniform1f(loc_tw_mask_y, (float)tw_mask_y);
+    p_glUniform1f(loc_tw_off_x, (float)tw_off_x);
+    p_glUniform1f(loc_tw_off_y, (float)tw_off_y);
     glBindTexture(GL_TEXTURE_2D, gpu_vram_tex);
     p_glBlendEquation(batch_subtract ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD);
     p_glBindBuffer(GL_ARRAY_BUFFER, gpu_vbo);
@@ -469,6 +523,126 @@ static void resolve_texture(const Prim *p) {
                     (int)v0, (int)u1, (int)v1);
 }
 
+/* One drawn primitive, kept only while HMBTN_TRACE=1 so a presented frame can say
+ * which packet covers a black pixel. Static, and never touched when tracing is off. */
+typedef struct TracePrim {
+    unsigned cmd;
+    short x[4];
+    short y[4];
+    unsigned char u[4];
+    unsigned char v[4];
+    unsigned char n;
+    unsigned char depth;
+    unsigned char r, g, b;
+    short page_x, page_y;
+    short clut_x, clut_y;
+    short tw_mask_x, tw_mask_y, tw_off_x, tw_off_y;
+} TracePrim;
+
+#define TRACE_PRIM_MAX 1536
+static TracePrim *trace_prims;
+static int trace_prim_count;
+static int trace_prim_overflow;
+static unsigned trace_e2_word;
+static int trace_e2_count;
+static int trace_line_share;
+static unsigned trace_line_cmd;
+static unsigned trace_line_next;
+static int trace_line_words_seen;
+static int trace_line_avail;
+static int trace_fill_share;
+static unsigned trace_fill_next;
+static unsigned char trace_grid[60][80];
+static unsigned char trace_seen[60][80];
+static int *trace_queue;
+
+extern int main_scene;
+
+static int trace_line_words(unsigned cmd) {
+    switch (cmd & ~0x02u) {
+    case 0x40:
+        return 3;
+    case 0x50:
+        return 4;
+    case 0x48:
+        return 5;
+    case 0x4C:
+        return 6;
+    default:
+        return 3;
+    }
+}
+
+static void trace_note_prim(unsigned cmd, const Prim *p) {
+    TracePrim *t;
+    int i;
+
+    if (trace_prims == NULL) {
+        trace_prims = (TracePrim *)malloc((size_t)TRACE_PRIM_MAX * sizeof(TracePrim));
+        if (trace_prims == NULL) {
+            return;
+        }
+    }
+    if (trace_prim_count >= TRACE_PRIM_MAX) {
+        trace_prim_overflow = 1;
+        return;
+    }
+    t = &trace_prims[trace_prim_count++];
+    t->cmd = cmd;
+    t->n = (unsigned char)p->count;
+    t->depth = (unsigned char)p->depth;
+    t->r = (unsigned char)(p->v[0].r * 255.0f);
+    t->g = (unsigned char)(p->v[0].g * 255.0f);
+    t->b = (unsigned char)(p->v[0].b * 255.0f);
+    t->page_x = (short)p->page_x;
+    t->page_y = (short)p->page_y;
+    t->clut_x = (short)p->clut_x;
+    t->clut_y = (short)p->clut_y;
+    t->tw_mask_x = (short)tw_mask_x;
+    t->tw_mask_y = (short)tw_mask_y;
+    t->tw_off_x = (short)tw_off_x;
+    t->tw_off_y = (short)tw_off_y;
+    for (i = 0; i < 4; i++) {
+        t->x[i] = 0;
+        t->y[i] = 0;
+        t->u[i] = 0;
+        t->v[i] = 0;
+    }
+    for (i = 0; i < p->count && i < 4; i++) {
+        t->x[i] = (short)p->v[i].x;
+        t->y[i] = (short)p->v[i].y;
+        t->u[i] = (unsigned char)p->v[i].u;
+        t->v[i] = (unsigned char)p->v[i].v;
+    }
+}
+
+static void trace_note_line(unsigned cmd, int avail, unsigned next) {
+    int words;
+
+    words = trace_line_words(cmd);
+    if (avail > words) {
+        trace_line_share = 1;
+        trace_line_cmd = cmd;
+        trace_line_next = next;
+        trace_line_words_seen = words;
+        trace_line_avail = avail;
+    }
+}
+
+static void trace_note_fill(int avail, unsigned next) {
+    if (avail > 3) {
+        trace_fill_share = 1;
+        trace_fill_next = next;
+    }
+}
+
+static void trace_note_e2(u_long word) {
+    if ((word & 0x000FFFFFu) != 0) {
+        trace_e2_word = (unsigned)word;
+        trace_e2_count++;
+    }
+}
+
 /* Polygon commands 0x20-0x3F. Returns 0 when the packet is too short for its layout. */
 static int decode_poly(const u_long *w, int avail, int emit) {
     unsigned cmd;
@@ -523,6 +697,9 @@ static int decode_poly(const u_long *w, int avail, int emit) {
         resolve_texture(&p);
     }
     emit_prim(&p);
+    if (host_tracing()) {
+        trace_note_prim(cmd, &p);
+    }
     return 1;
 }
 
@@ -587,6 +764,9 @@ static int decode_rect(const u_long *w, int avail, int emit) {
         resolve_texture(&p);
     }
     emit_prim(&p);
+    if (host_tracing()) {
+        trace_note_prim(cmd, &p);
+    }
     return 1;
 }
 
@@ -605,7 +785,13 @@ static int run_packet(const u_long *w, int len, int emit) {
             return decode_rect(w + i, len - i, emit);
         }
         if (cmd >= 0x40 && cmd <= 0x5F) {
+            if (emit && host_tracing()) {
+                trace_note_line(cmd, len - i, i + trace_line_words(cmd) < len ? (unsigned)(w[i + trace_line_words(cmd)] >> 24) : 0);
+            }
             return 0;
+        }
+        if (cmd == 0x02 && emit && host_tracing()) {
+            trace_note_fill(len - i, i + 3 < len ? (unsigned)(w[i + 3] >> 24) : 0);
         }
         if (cmd == 0xA0) {
             int x;
@@ -646,6 +832,27 @@ static int run_packet(const u_long *w, int len, int emit) {
         }
         if (cmd == 0xE1 && emit) {
             set_tpage((unsigned)(w[i] & 0x1FF));
+        }
+        if (cmd == 0xE2 && emit) {
+            int mx;
+            int my;
+            int ox;
+            int oy;
+
+            mx = (int)((w[i] & 0x1F) << 3);
+            my = (int)(((w[i] >> 5) & 0x1F) << 3);
+            ox = (int)(((w[i] >> 10) & 0x1F) << 3);
+            oy = (int)(((w[i] >> 15) & 0x1F) << 3);
+            if (mx != tw_mask_x || my != tw_mask_y || ox != tw_off_x || oy != tw_off_y) {
+                flush_verts();
+                tw_mask_x = mx;
+                tw_mask_y = my;
+                tw_off_x = ox;
+                tw_off_y = oy;
+            }
+            if (host_tracing()) {
+                trace_note_e2(w[i]);
+            }
         }
         i++;
     }
@@ -734,11 +941,508 @@ void gpu_debug_reset_clear(void) {
     clear_rgb[2] = 31.0f / 255.0f;
 }
 
-void gpu_put_draw_env(u_short tpage, u_char isbg, u_char r, u_char g, u_char b) {
+void gpu_put_draw_env(u_short tpage, u_char isbg, u_char r, u_char g, u_char b, int x, int y, int w, int h) {
     set_tpage(tpage);
+    clip_x = x;
+    clip_y = y;
+    clip_w = w;
+    clip_h = h;
     if (isbg) {
         gpu_clear_screen(r, g, b);
     }
+}
+
+int gpu_debug_vert_bytes(void) {
+    return (int)sizeof(GpuVert);
+}
+
+int gpu_debug_vert_cap(void) {
+    return GPU_VERT_MAX;
+}
+
+/* Copies the part of (x, y, w, h) that overlaps the draw buffer from the back buffer
+ * into the static VRAM. One GL row per VRAM row, into static buffers. */
+void gpu_refresh_draw_overlap(int x, int y, int w, int h) {
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    int row;
+    int n;
+    int i;
+    GLint viewport[4];
+
+    if (!gpu_ready || w <= 0 || h <= 0 || clip_w <= 0 || clip_h <= 0) {
+        return;
+    }
+    x0 = x > clip_x ? x : clip_x;
+    y0 = y > clip_y ? y : clip_y;
+    x1 = x + w < clip_x + clip_w ? x + w : clip_x + clip_w;
+    y1 = y + h < clip_y + clip_h ? y + h : clip_y + clip_h;
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+    flush_verts();
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    n = x1 - x0;
+    if (n > 320) {
+        n = 320;
+    }
+    for (row = y0; row < y1; row++) {
+        int sy;
+        int py;
+        int gy;
+        int gx0;
+        int gx1;
+        int width;
+
+        sy = row - clip_y;
+        py = (int)(((float)sy + 0.5f) * (float)viewport[3] / 240.0f);
+        gy = viewport[3] - 1 - py;
+        gx0 = (int)(((float)(x0 - clip_x) + 0.5f) * (float)viewport[2] / 320.0f);
+        gx1 = (int)(((float)(x0 - clip_x + n - 1) + 0.5f) * (float)viewport[2] / 320.0f);
+        width = gx1 - gx0 + 1;
+        if (width < 1) {
+            width = 1;
+        }
+        if (width > 2048) {
+            width = 2048;
+        }
+        glReadPixels(gx0, gy, width, 1, GL_RGBA, GL_UNSIGNED_BYTE, refresh_rgba);
+        for (i = 0; i < n; i++) {
+            int gx;
+            unsigned char *p;
+
+            gx = (int)(((float)(x0 - clip_x + i) + 0.5f) * (float)viewport[2] / 320.0f) - gx0;
+            if (gx < 0) {
+                gx = 0;
+            }
+            if (gx >= width) {
+                gx = width - 1;
+            }
+            p = refresh_rgba + gx * 4;
+            refresh_words[i] = (uint16_t)((p[0] >> 3) | ((p[1] >> 3) << 5) | ((p[2] >> 3) << 10));
+        }
+        vram_load(x0, row, n, 1, refresh_words);
+    }
+}
+
+static float trace_cross(float ax, float ay, float bx, float by, float cx, float cy) {
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+}
+
+static int trace_inside(float px, float py, float ax, float ay, float bx, float by, float cx, float cy) {
+    float c1;
+    float c2;
+    float c3;
+
+    c1 = trace_cross(ax, ay, bx, by, px, py);
+    c2 = trace_cross(bx, by, cx, cy, px, py);
+    c3 = trace_cross(cx, cy, ax, ay, px, py);
+    if (c1 >= -0.5f && c2 >= -0.5f && c3 >= -0.5f) {
+        return 1;
+    }
+    if (c1 <= 0.5f && c2 <= 0.5f && c3 <= 0.5f) {
+        return 1;
+    }
+    return 0;
+}
+
+static int trace_tw(int c, int mask, int off) {
+    static const int bits[5] = {8, 16, 32, 64, 128};
+    int i;
+
+    c &= 255;
+    for (i = 0; i < 5; i++) {
+        if (mask & bits[i]) {
+            c = (c & ~bits[i]) | (off & bits[i]);
+        }
+    }
+    return c;
+}
+
+/* Last primitive whose triangle contains (px, py). Later packets overdraw earlier ones. */
+static int trace_cover(float px, float py, int *i0, int *i1, int *i2) {
+    int i;
+    int hit;
+
+    hit = -1;
+    for (i = 0; i < trace_prim_count; i++) {
+        TracePrim *p;
+
+        p = &trace_prims[i];
+        if (p->n >= 3 && trace_inside(px, py, p->x[0], p->y[0], p->x[1], p->y[1], p->x[2], p->y[2])) {
+            hit = i;
+            *i0 = 0;
+            *i1 = 1;
+            *i2 = 2;
+        } else if (p->n == 4 && trace_inside(px, py, p->x[1], p->y[1], p->x[3], p->y[3], p->x[2], p->y[2])) {
+            hit = i;
+            *i0 = 1;
+            *i1 = 3;
+            *i2 = 2;
+        }
+    }
+    return hit;
+}
+
+static unsigned trace_word(const TracePrim *p, float px, float py, int i0, int i1, int i2, int *u_out, int *v_out) {
+    float ax;
+    float ay;
+    float bx;
+    float by;
+    float cx;
+    float cy;
+    float area;
+    float w0;
+    float w1;
+    float w2;
+    float u;
+    float v;
+    int tu;
+    int tv;
+    int x;
+    int y;
+    int index;
+    unsigned word;
+
+    ax = (float)p->x[i0];
+    ay = (float)p->y[i0];
+    bx = (float)p->x[i1];
+    by = (float)p->y[i1];
+    cx = (float)p->x[i2];
+    cy = (float)p->y[i2];
+    area = trace_cross(ax, ay, bx, by, cx, cy);
+    if (area > -0.5f && area < 0.5f) {
+        u = (float)p->u[i0];
+        v = (float)p->v[i0];
+    } else {
+        w0 = trace_cross(bx, by, cx, cy, px, py) / area;
+        w1 = trace_cross(cx, cy, ax, ay, px, py) / area;
+        w2 = trace_cross(ax, ay, bx, by, px, py) / area;
+        u = w0 * (float)p->u[i0] + w1 * (float)p->u[i1] + w2 * (float)p->u[i2];
+        v = w0 * (float)p->v[i0] + w1 * (float)p->v[i1] + w2 * (float)p->v[i2];
+    }
+    if (u < 0.0f) {
+        u = 0.0f;
+    }
+    if (v < 0.0f) {
+        v = 0.0f;
+    }
+    tu = trace_tw((int)u, p->tw_mask_x, p->tw_off_x);
+    tv = trace_tw((int)v, p->tw_mask_y, p->tw_off_y);
+    *u_out = tu;
+    *v_out = tv;
+    if (p->depth == 0) {
+        return 0;
+    }
+    if (p->depth <= 4) {
+        x = p->page_x + tu / 4;
+        y = p->page_y + tv;
+        word = vram[y & 511][x & 1023];
+        index = (int)((word >> ((tu & 3) * 4)) & 0xF);
+        return vram[p->clut_y & 511][(p->clut_x + index) & 1023];
+    }
+    if (p->depth <= 8) {
+        x = p->page_x + tu / 2;
+        y = p->page_y + tv;
+        word = vram[y & 511][x & 1023];
+        index = (tu & 1) ? (int)((word >> 8) & 0xFF) : (int)(word & 0xFF);
+        return vram[p->clut_y & 511][(p->clut_x + index) & 1023];
+    }
+    x = p->page_x + tu;
+    y = p->page_y + tv;
+    return vram[y & 511][x & 1023];
+}
+
+static int trace_on_farm(int scene) {
+    /* SCENE_FARM, the minigame return, and the load/save/menu/staff returns. */
+    return scene == 2 || scene == 6 || scene == 14 || scene == 15 || scene == 19 || scene == 20;
+}
+
+static const char *trace_region(int location, int scene, int pixels, int cy, int nonblack) {
+    /* A pure fade is black with nothing drawn on it. The flashback keeps a sprite or a line of text. */
+    if (pixels > (320 * 240) / 2 && nonblack >= 4) {
+        return "flashback background";
+    }
+    if (scene >= AREA_HOUSE0_SPRING && scene <= AREA_HOUSE2_WINTER && cy >= 80) {
+        return "the bed";
+    }
+    if (location == PLACE_FARM) {
+        return "left of the house";
+    }
+    return "black center";
+}
+
+/* Writes the presented frame one row at a time. The row buffer is the one StoreImage
+ * already keeps; this runs only under HMBTN_TRACE and only the first time each region is seen. */
+static void trace_save_view(const char *region, int ox, int oy, int vw, int vh) {
+    static int saved_house;
+    static int saved_bed;
+    static int saved_flash;
+    const char *path;
+    FILE *out;
+    unsigned char header[54];
+    uint32_t size;
+    int y;
+    int i;
+
+    path = NULL;
+    if (strcmp(region, "left of the house") == 0 && !saved_house) {
+        path = "gpu_left_of_the_house.bmp";
+        saved_house = 1;
+    } else if (strcmp(region, "the bed") == 0 && !saved_bed) {
+        path = "gpu_the_bed.bmp";
+        saved_bed = 1;
+    } else if (strcmp(region, "flashback background") == 0 && !saved_flash) {
+        path = "gpu_flashback_background.bmp";
+        saved_flash = 1;
+    }
+    if (path == NULL || vw > 2048) {
+        return;
+    }
+    out = fopen(path, "wb");
+    if (out == NULL) {
+        SDL_Log("trace gpu: could not save %s", path);
+        return;
+    }
+    memset(header, 0, sizeof(header));
+    header[0] = 'B';
+    header[1] = 'M';
+    size = 54u + (uint32_t)vw * (uint32_t)vh * 4u;
+    memcpy(header + 2, &size, 4);
+    header[10] = 54;
+    header[14] = 40;
+    memcpy(header + 18, &vw, 4);
+    memcpy(header + 22, &vh, 4);
+    header[26] = 1;
+    header[28] = 32;
+    fwrite(header, 1, sizeof(header), out);
+    for (y = 0; y < vh; y++) {
+        glReadPixels(ox, oy + y, vw, 1, GL_RGBA, GL_UNSIGNED_BYTE, refresh_rgba);
+        for (i = 0; i < vw; i++) {
+            unsigned char swap;
+
+            swap = refresh_rgba[i * 4];
+            refresh_rgba[i * 4] = refresh_rgba[i * 4 + 2];
+            refresh_rgba[i * 4 + 2] = swap;
+        }
+        fwrite(refresh_rgba, 4, (size_t)vw, out);
+    }
+    fclose(out);
+    SDL_Log("trace gpu: saved %s", path);
+}
+
+/* Reads one presented frame while tracing and logs decision 4: a non-zero texture
+ * window, whether each black center is covered, and a line or fill that shares its packet. */
+void gpu_trace_frame(void) {
+    GLint viewport[4];
+    int location;
+    int scene;
+    int vw;
+    int vh;
+    int x;
+    int y;
+    int blobs;
+    int nonblack;
+    int b;
+    int i0;
+    int i1;
+    int i2;
+    struct {
+        int n;
+        int sx;
+        int sy;
+    } found[8];
+
+    if (!host_tracing() || !gpu_ready) {
+        return;
+    }
+    if (!trace_on_farm(main_scene) || (host_vblank_count() % 60) != 0) {
+        trace_prim_count = 0;
+        trace_prim_overflow = 0;
+        return;
+    }
+    location = 0;
+    scene = 0;
+    if (farm_area.mode.data == &farm_area.mode.script) {
+        location = farm_area.mode.script.head.place.location;
+        scene = farm_area.mode.script.head.scene;
+    }
+    flush_verts();
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    vw = viewport[2];
+    vh = viewport[3];
+    if (vw <= 0 || vh <= 0 || vw > 2048 || vh > 1080) {
+        trace_prim_count = 0;
+        trace_prim_overflow = 0;
+        return;
+    }
+    memset(trace_grid, 0, sizeof(trace_grid));
+    memset(trace_seen, 0, sizeof(trace_seen));
+    nonblack = 0;
+    for (y = 0; y < 60; y++) {
+        int py;
+        int gy;
+
+        py = (int)(((float)(y * 4 + 2) + 0.5f) * (float)vh / 240.0f);
+        gy = vh - 1 - py;
+        if (gy < 0) {
+            gy = 0;
+        }
+        if (gy >= vh) {
+            gy = vh - 1;
+        }
+        glReadPixels(viewport[0], viewport[1] + gy, vw, 1, GL_RGBA, GL_UNSIGNED_BYTE, refresh_rgba);
+        for (x = 0; x < 80; x++) {
+            int px;
+            unsigned char *pix;
+
+            px = (int)(((float)(x * 4 + 2) + 0.5f) * (float)vw / 320.0f);
+            if (px < 0) {
+                px = 0;
+            }
+            if (px >= vw) {
+                px = vw - 1;
+            }
+            pix = refresh_rgba + (size_t)px * 4u;
+            if (pix[0] < 8 && pix[1] < 8 && pix[2] < 8) {
+                trace_grid[y][x] = 1;
+            } else {
+                nonblack++;
+            }
+        }
+    }
+    blobs = 0;
+    if (trace_queue == NULL) {
+        trace_queue = (int *)malloc(60 * 80 * sizeof(int));
+    }
+    if (trace_queue != NULL) {
+    for (y = 0; y < 60; y++) {
+        for (x = 0; x < 80; x++) {
+            int *queue;
+            int qh;
+            int qt;
+            int n;
+            int sx;
+            int sy;
+            int k;
+
+            queue = trace_queue;
+            if (!trace_grid[y][x] || trace_seen[y][x]) {
+                continue;
+            }
+            qh = 0;
+            qt = 0;
+            n = 0;
+            sx = 0;
+            sy = 0;
+            queue[qt++] = y * 80 + x;
+            trace_seen[y][x] = 1;
+            while (qh < qt) {
+                int cur;
+                int cx;
+                int cy;
+                static const int dx[4] = {-1, 1, 0, 0};
+                static const int dy[4] = {0, 0, -1, 1};
+
+                cur = queue[qh++];
+                cx = cur % 80;
+                cy = cur / 80;
+                n++;
+                sx += cx;
+                sy += cy;
+                for (k = 0; k < 4; k++) {
+                    int nx;
+                    int ny;
+
+                    nx = cx + dx[k];
+                    ny = cy + dy[k];
+                    if (nx < 0 || ny < 0 || nx >= 80 || ny >= 60) {
+                        continue;
+                    }
+                    if (trace_grid[ny][nx] && !trace_seen[ny][nx]) {
+                        trace_seen[ny][nx] = 1;
+                        queue[qt++] = ny * 80 + nx;
+                    }
+                }
+            }
+            if (n < 30) {
+                continue;
+            }
+            if (blobs < 8) {
+                found[blobs].n = n;
+                found[blobs].sx = sx;
+                found[blobs].sy = sy;
+                blobs++;
+            } else {
+                int small;
+
+                small = 0;
+                for (k = 1; k < 8; k++) {
+                    if (found[k].n < found[small].n) {
+                        small = k;
+                    }
+                }
+                if (n > found[small].n) {
+                    found[small].n = n;
+                    found[small].sx = sx;
+                    found[small].sy = sy;
+                }
+            }
+        }
+    }
+    }
+    SDL_Log("trace gpu: frame vblank %d place %d scene 0x%x prims %d overflow %d black %d e2 %d word 0x%08x line %d cmd 0x%02x next 0x%02x fill %d next 0x%02x",
+            host_vblank_count(), location, scene, trace_prim_count, trace_prim_overflow, blobs, trace_e2_count,
+            trace_e2_word, trace_line_share, trace_line_cmd, trace_line_next, trace_fill_share, trace_fill_next);
+    for (b = 0; b < blobs; b++) {
+        int cx;
+        int cy;
+        int pixels;
+        int hit;
+        int tu;
+        int tv;
+        unsigned word;
+        const char *region;
+        TracePrim *p;
+
+        cx = found[b].n > 0 ? (found[b].sx / found[b].n) * 4 + 2 : 0;
+        cy = found[b].n > 0 ? (found[b].sy / found[b].n) * 4 + 2 : 0;
+        pixels = found[b].n * 16;
+        region = trace_region(location, scene, pixels, cy, nonblack);
+        hit = trace_cover((float)cx, (float)cy, &i0, &i1, &i2);
+        tu = 0;
+        tv = 0;
+        word = 0;
+        p = NULL;
+        if (hit >= 0) {
+            p = &trace_prims[hit];
+            if (p->depth > 0) {
+                word = trace_word(p, (float)cx, (float)cy, i0, i1, i2, &tu, &tv);
+            }
+        }
+        if (p != NULL && p->depth > 0) {
+            SDL_Log("trace gpu: %s center (%d,%d) pixels %d covered 1 cmd 0x%02x page %d,%d depth %d clut %d,%d uv %d,%d word 0x%04x win %d,%d,%d,%d",
+                    region, cx, cy, pixels, p->cmd, p->page_x, p->page_y, p->depth, p->clut_x, p->clut_y, tu, tv, word,
+                    p->tw_mask_x, p->tw_mask_y, p->tw_off_x, p->tw_off_y);
+        } else if (p != NULL) {
+            SDL_Log("trace gpu: %s center (%d,%d) pixels %d covered 1 cmd 0x%02x untextured rgb %d,%d,%d",
+                    region, cx, cy, pixels, p->cmd, p->r, p->g, p->b);
+        } else {
+            SDL_Log("trace gpu: %s center (%d,%d) pixels %d covered 0", region, cx, cy, pixels);
+        }
+        trace_save_view(region, viewport[0], viewport[1], vw, vh);
+    }
+    trace_prim_count = 0;
+    trace_prim_overflow = 0;
+    trace_e2_count = 0;
+    trace_e2_word = 0;
+    trace_line_share = 0;
+    trace_line_cmd = 0;
+    trace_line_next = 0;
+    trace_fill_share = 0;
+    trace_fill_next = 0;
 }
 
 int gpu_debug_read_pixel(int x, int y, unsigned char rgb[3]) {

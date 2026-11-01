@@ -47,7 +47,8 @@ DISPENV *SetDefDispEnv(DISPENV *env, int x, int y, int w, int h) {
 }
 
 DRAWENV *PutDrawEnv(DRAWENV *env) {
-    gpu_put_draw_env(env->tpage, env->isbg, env->r0, env->g0, env->b0);
+    gpu_put_draw_env(env->tpage, env->isbg, env->r0, env->g0, env->b0, env->clip.x, env->clip.y, env->clip.w,
+                     env->clip.h);
     return env;
 }
 
@@ -67,10 +68,16 @@ u_short GetClut(int x, int y) {
     return (u_short)getClut(x, y);
 }
 
+/* RECT w/h are the masks in pixels and x/y the offsets, each in steps of 8. */
+static u_long tex_window_word(const RECT *tw) {
+    return 0xe2000000u | (u_long)(((tw->w & 0xff) >> 3) & 0x1f) | ((u_long)(((tw->h & 0xff) >> 3) & 0x1f) << 5) |
+           ((u_long)(((tw->x & 0xff) >> 3) & 0x1f) << 10) | ((u_long)(((tw->y & 0xff) >> 3) & 0x1f) << 15);
+}
+
 void SetDrawMode(DR_MODE *p, int dfe, int dtd, int tpage, RECT *tw) {
     setlen(p, 2);
     p->code[0] = _get_mode(dfe, dtd, tpage);
-    p->code[1] = tw != NULL ? 0xe2000000u : 0;
+    p->code[1] = tw != NULL ? tex_window_word(tw) : 0;
 }
 
 void SetDrawTPage(DR_TPAGE *p, int dfe, int dtd, int tpage) {
@@ -112,9 +119,8 @@ void SetDrawEnv(DR_ENV *dr_env, DRAWENV *env) {
 }
 
 void SetTexWindow(DR_TWIN *p, RECT *tw) {
-    (void)tw;
     setlen(p, 2);
-    p->code[0] = 0xe2000000u;
+    p->code[0] = tw != NULL ? tex_window_word(tw) : 0xe2000000u;
     p->code[1] = 0;
 }
 

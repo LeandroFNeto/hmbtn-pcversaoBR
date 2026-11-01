@@ -36,17 +36,23 @@ O port roda o código original do jogo num executável nativo (`hmbtn-host.exe`,
 | 7 | `pc-port-input` | Teclado e controle (SDL2): título → menu → New Game → diálogo do prefeito → tela de nome |
 | 8 | `pc-port-audio` | SPU virtual, ADPCM (VAG), ADSR e efeitos sonoros pelo SDL2 |
 | 9 | `pc-port-seq-player` | Música SEQ com tempo por amostras e loop (trilha do título) |
+| 10 | `pc-port-memory-card` (arquivado) | Cartão de memória virtual no slot 1 (`mcd001.mcr`, 128 KB no formato bruto do PS1, o mesmo dos emuladores): gravar no diário cria o save de 4 blocos, fechar e abrir o host mantém o arquivo, e o CONTINUE lista o diário com nome e data e volta para dentro da casa no dia salvo |
+| 11 | `pc-port-farm-load` (arquivado) | As tabelas de animação da fazenda guardam seus offsets no PC (cópia corrigida de `anim.h`, conferida pelo `HMBTN_SELFTEST=1`), o build falha se outro arquivo perder inicializadores do mesmo jeito, e o jogo passa do travamento em `anim_bind_file` e entra na cena da fazenda |
+| 12 | `pc-port-null-reads` (arquivado) | Leituras e escritas por ponteiro nulo que o PS1 tolera (endereço 0 é RAM do kernel) chegam à RAM baixa do PS1 no PC, com os valores do kernel; as do primeiro quadro da fazenda em `scene.c` passam. Um crash agora registra a pilha no log |
+| 13 | `pc-port-gte-library` (arquivado) | As 22 funções da `libgte` que o jogo chama (seno/cosseno, arco-tangente, raízes, matrizes de rotação, pilha de matrizes, `RotTrans`, normalização, neblina) dão os mesmos resultados da biblioteca do PS1, conferidos no `HMBTN_SELFTEST=1` contra as tabelas do próprio executável: um jogo novo chega à fazenda, o prefeito vem falar com o jogador e o jogo segue rodando |
+| 14 | `pc-port-ground-probe` (arquivado) | Quando a sonda de chão não acha chão (um passo à frente do jogador, ou numa varredura de campo), o PC lê o mesmo "sem chão" que o PS1: a lembrança de infância da primeira manhã passa e o jogo chega ao jogo livre dentro da casa |
+| — | `pc-port-gpu-fixes` | `StoreImage` sobre o draw buffer devolve o quadro em 15 bits (o álbum em `(896, 256)` continua na VRAM estática), a janela de textura `0xE2` mascara o UV, e `SetBackColor` com as duas matrizes guarda o valor. O `HMBTN_SELFTEST=1` cobre os três. As áreas pretas continuam: o traço da tarefa 4.2 não casou com nenhuma das três correções |
 
 ### Ainda falta
 
 - **Build no Linux**: `pc-port-psyq-stubs` tarefa 5.2 aberta (o WSL desta máquina não tem GCC; `cmake/host.cmake` ainda tem flags só de Windows).
-- **Renderizar para a VRAM**: efeitos que leem a tela de volta com `StoreImage` (captura do álbum de fotos) veem dados antigos.
-- **Detalhes de GPU**: linhas, dithering, bit de máscara e janela de textura.
+- **Detalhes de GPU**: linhas, dithering e bit de máscara. A janela de textura já entra no quadro (`pc-port-gpu-fixes` tarefas 2.1 e 2.2).
 - **Áudio**: reverb, pitch bend/vibrato, streaming CD-XA, arquivos SEP.
-- **Cartão de memória**: `libmcrd`/`libmcx` respondem "sem cartão"; não há save/load.
-- **Gameplay além da introdução**: não verificado até a fazenda.
+- **Áreas pretas no cenário**: à esquerda da casa, no lugar da cama e no fundo da lembrança. O traço de `pc-port-gpu-fixes` tarefa 4.2 não casou com janela de textura, amostra no endereço errado, nem linha/preenchimento engolindo o pacote (`e2`, `line` e `fill` ficaram 0). A cama não tem primitiva no centro; o buraco da fazenda é uma quad sem textura `(20, 0, 0)` ou um sprite 8 bits cuja amostra é `0x0000`. Nenhuma das três correções foi aplicada.
+- **Luzes do Gs**: `GsSetFlatLight`, `GsSetAmbient` e `GsSetLightMode` continuam vazios. O jogo não emite `ncs` nem `dpcs`, então `SetBackColor` e as matrizes, que já guardam o valor, não recoloram os polígonos. Fora do `pc-port-gpu-fixes`.
+- **Limites do cartão de memória**: o slot 2 nunca tem cartão, a PocketStation não existe, e editar o `.mcr` com o host aberto não é suportado (o host guarda a imagem na memória e grava por cima). Ficaram fora do escopo de `pc-port-memory-card`.
 - **Mods** (`/mods`, texturas HD, roupas sazonais): os pontos de encaixe existem (`vram_observe_write` e `texture_resolve` em `src/pc_port/src/vram.c`), mas nenhum carregador.
-- **Arquivamento**: os changes acima, exceto `pc-port-gl-renderer`, ainda não foram arquivados no OpenSpec.
+- **Arquivamento**: os changes acima, exceto `pc-port-gl-renderer`, `pc-port-farm-load`, `pc-port-null-reads`, `pc-port-gte-library`, `pc-port-memory-card` e `pc-port-ground-probe`, ainda não foram arquivados no OpenSpec.
 
 ## Compilando o Port para PC (Windows)
 
@@ -60,6 +66,10 @@ cmake --build build/host
 build\host\hmbtn-host.exe
 ```
 
+O build falha se um arquivo do jogo gerar o aviso "excess elements in array initializer": o GCC 2.95 do PS1 guardava esses valores e o GCC moderno os descarta. A correção é uma cópia corrigida do header, com `hmbtn_host_patch_header` em `cmake/host.cmake`, sem editar `src/`.
+
 Teclado: setas = direcional, `X` = ✕, `Z` = ○, `C` = □, `V` = △, `Enter` = Start, `Shift direito` = Select, `A`/`S` = L1/R1, `Q`/`W` = L2/R2.
 
-Diagnóstico: `HMBTN_SELFTEST=1` roda as checagens automáticas na abertura; `HMBTN_AUDIO_DUMP=arquivo.wav` grava os primeiros 20 s de áudio; o log fica em `build/host/hmbtn-host.log`.
+Cartão de memória: o slot 1 é o arquivo `mcd001.mcr` ao lado do executável, criado já formatado na primeira execução; `HMBTN_MEMCARD=caminho\arquivo.mcr` usa outro arquivo. É uma imagem bruta de 128 KB, que pode ser copiada de ou para emuladores (DuckStation, ePSXe).
+
+Diagnóstico: `HMBTN_SELFTEST=1` roda as checagens automáticas na abertura; `HMBTN_AUDIO_DUMP=arquivo.wav` grava os primeiros 20 s de áudio; `HMBTN_TRACE=1` registra as trocas de cena e as chamadas de cartão de memória; o log fica em `build/host/hmbtn-host.log`. Num crash, a linha `host fault stack:` traz os endereços de retorno, que `addr2line -f -p -e build\host\hmbtn-host.exe <endereços>` transforma em funções e linhas.

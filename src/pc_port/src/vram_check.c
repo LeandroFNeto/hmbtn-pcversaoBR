@@ -1,6 +1,7 @@
 /* VRAM, sampling, walker, and blend checks, run at startup when HMBTN_SELFTEST=1. They
  * draw into the back buffer and read it back before any swap. */
 
+#include <gte.h>
 #include <host.h>
 #include <libgpu.h>
 #include <vram.h>
@@ -71,6 +72,9 @@ static POLY_G3 ck_g3;
 static POLY_FT3 ck_ft3;
 static POLY_FT4 ck_ft4;
 static POLY_GT4 ck_gt4;
+static POLY_G4 ck_g4;
+static DR_TWIN ck_twin;
+static DR_MODE ck_mode;
 
 static void draw_one(void *p) {
     termPrim(p);
@@ -381,6 +385,118 @@ static int check_resolver(void) {
     return failed;
 }
 
+static int window_axis(int c, int mask, int off) {
+    int bit;
+
+    c &= 255;
+    for (bit = 8; bit <= 128; bit <<= 1) {
+        if ((mask & bit) != 0) {
+            c = (c & ~bit) | (off & bit);
+        }
+    }
+    return c;
+}
+
+/* Back-color independence, the texture window, and draw-buffer readback. */
+static int check_gpu_fixes(void) {
+    RECT tw;
+    RECT r;
+    uint16_t block[64];
+    uint16_t clut[16];
+    static uint16_t photo[64 * 256];
+    static uint16_t lower[320 * 240];
+    int failed;
+    int i;
+    int mask;
+    int off;
+    unsigned word;
+
+    failed = check(gpu_debug_vert_bytes() == 56 && gpu_debug_vert_cap() == 6144,
+                   "the vertex is 56 bytes and the buffer holds 6144");
+
+    gte_SetBackColor(10, 20, 30);
+    host_clear();
+    memset(&ck_g4, 0, sizeof(ck_g4));
+    setPolyG4(&ck_g4);
+    setRGB0(&ck_g4, 0, 255, 0);
+    setRGB1(&ck_g4, 0, 255, 0);
+    setRGB2(&ck_g4, 0, 255, 0);
+    setRGB3(&ck_g4, 0, 255, 0);
+    setXY4(&ck_g4, 200, 80, 216, 80, 200, 96, 216, 96);
+    draw_one(&ck_g4);
+    failed |= check(is_rgb(204, 84, 0, 255, 0, 8),
+                    "a POLY_G4 keeps its corner color when the back color differs");
+    gte_SetBackColor(0, 0, 0);
+
+    setRECT(&tw, 0, 0, 8, 0);
+    SetTexWindow(&ck_twin, &tw);
+    word = ck_twin.code[0];
+    mask = (int)((word & 0x1F) << 3);
+    off = (int)(((word >> 10) & 0x1F) << 3);
+    failed |= check(window_axis(9, mask, off) == 1, "mask 8, offset 0 encodes the word whose sample of U 9 is U 1");
+    SetDrawMode(&ck_mode, 0, 0, 0, NULL);
+    failed |= check(ck_mode.code[1] == 0, "a null SetDrawMode window does not emit 0xE2");
+
+    put_word(640, 0, 0x0020); /* 4-bit texel 1 = index 2 */
+    put_word(642, 0, 0x0010); /* 4-bit texel 9 = index 1 */
+    put_word(1, 480, 0x001F); /* index 1 red */
+    put_word(2, 480, 0x7C00); /* index 2 blue */
+    host_clear();
+    memset(&ck_tpage, 0, sizeof(ck_tpage));
+    setDrawTPage(&ck_tpage, 0, 0, getTPage(0, 0, 640, 0));
+    make_sprt(220, 120, 1, 1, 9, getClut(0, 480), 1);
+    catPrim(&ck_twin, &ck_tpage);
+    catPrim(&ck_tpage, &ck_sprt);
+    termPrim(&ck_sprt);
+    DrawOTag((u_long *)&ck_twin);
+    failed |= check(is_rgb(220, 120, 0, 0, 255, 8), "a windowed sample of U 9 draws the texel at U 1");
+    make_sprt(221, 120, 1, 1, 9, getClut(0, 480), 1);
+    draw_one(&ck_sprt);
+    failed |= check(is_rgb(221, 120, 0, 0, 255, 8), "the next DrawOTag keeps the texture window");
+    setRECT(&tw, 0, 0, 0, 0);
+    SetTexWindow(&ck_twin, &tw);
+    termPrim(&ck_twin);
+    DrawOTag((u_long *)&ck_twin);
+
+    host_clear();
+    tile(16, 16, 255, 0, 0, 0);
+    draw_one(&ck_tile);
+    setRECT(&r, 16, 16, 8, 8);
+    memset(block, 0, sizeof(block));
+    StoreImage(&r, (u_long *)block);
+    failed |= check(block[9] == 0x001F && block[54] == 0x001F, "an 8 x 8 block inside the draw buffer stores its color");
+    memset(block, 0, sizeof(block));
+    StoreImage(&r, (u_long *)block);
+    failed |= check(block[9] == 0x001F && block[54] == 0x001F, "storing that block again without drawing returns it");
+
+    for (i = 0; i < 16; i++) {
+        clut[i] = 0x1111;
+    }
+    vram_load(100, 500, 16, 1, clut);
+    setRECT(&r, 100, 500, 16, 1);
+    memset(clut, 0, sizeof(clut));
+    StoreImage(&r, (u_long *)clut);
+    failed |= check(clut[0] == 0x1111 && clut[15] == 0x1111, "a 16 x 1 CLUT row outside the draw buffer is unchanged");
+
+    vram_fill(896, 256, 64, 256, 0x1234);
+    setRECT(&r, 896, 256, 64, 256);
+    StoreImage(&r, (u_long *)photo);
+    failed |= check(photo[0] == 0x1234 && photo[64 * 256 - 1] == 0x1234,
+                    "the photo scratch (896, 256, 64, 256) is not replaced by the frame");
+
+    vram_fill(0, 240, 320, 240, 0x7FFF);
+    gpu_put_draw_env(0, 0, 0, 0, 0, 0, 240, 320, 240);
+    gpu_clear_screen(255, 0, 0);
+    setRECT(&r, 0, 240, 320, 240);
+    StoreImage(&r, (u_long *)lower);
+    failed |= check(lower[0] == 0x001F && lower[320 * 120 + 160] == 0x001F && lower[320 * 240 - 1] == 0x001F,
+                    "storing (0, 240, 320, 240) returns the frame drawn into that buffer");
+    gpu_put_draw_env(10, 0, 0, 0, 0, 0, 0, 320, 240);
+    gpu_debug_reset_clear();
+    host_clear();
+    return failed;
+}
+
 int vram_self_check(void) {
     int failed;
 
@@ -390,6 +506,7 @@ int vram_self_check(void) {
     failed |= check_chain_state();
     failed |= check_blending();
     failed |= check_resolver();
+    failed |= check_gpu_fixes();
     host_debug_reset_game_drawn();
     gpu_take_game_drew();
     return failed;

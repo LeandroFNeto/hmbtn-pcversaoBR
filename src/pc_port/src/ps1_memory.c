@@ -34,6 +34,36 @@ static int map_range(uintptr_t base, size_t size, const char *name) {
 }
 
 #ifdef _WIN32
+#define CRASH_FRAMES 16
+
+/* The return addresses on the faulting thread's frame chain, innermost first. A frame
+ * outside the thread's stack or not word-aligned ends the walk: the filter must not fault. */
+static void log_crash_stack(DWORD ebp) {
+    NT_TIB *tib;
+    uintptr_t low;
+    uintptr_t high;
+    char line[CRASH_FRAMES * 11 + 1];
+    DWORD next;
+    int len;
+    int frames;
+
+    tib = (NT_TIB *)NtCurrentTeb();
+    low = (uintptr_t)tib->StackLimit;
+    high = (uintptr_t)tib->StackBase;
+    len = 0;
+    frames = 0;
+    while (frames < CRASH_FRAMES && ebp >= low && ebp + 8 <= high && (ebp & 3) == 0) {
+        next = ((DWORD *)(uintptr_t)ebp)[0];
+        len += SDL_snprintf(line + len, sizeof(line) - len, " 0x%08lX", (unsigned long)((DWORD *)(uintptr_t)ebp)[1]);
+        frames++;
+        if (next <= ebp) {
+            break;
+        }
+        ebp = next;
+    }
+    SDL_Log("host fault stack:%s", frames > 0 ? line : " (no frames)");
+}
+
 static LONG WINAPI log_crash(EXCEPTION_POINTERS *info) {
     EXCEPTION_RECORD *record;
 
@@ -41,6 +71,7 @@ static LONG WINAPI log_crash(EXCEPTION_POINTERS *info) {
     SDL_Log("host fault: code 0x%08lX at 0x%08X, access 0x%08X", (unsigned long)record->ExceptionCode,
             (unsigned)(uintptr_t)record->ExceptionAddress,
             record->NumberParameters >= 2 ? (unsigned)record->ExceptionInformation[1] : 0u);
+    log_crash_stack(info->ContextRecord->Ebp);
     return EXCEPTION_CONTINUE_SEARCH;
 }
 #endif
@@ -129,10 +160,25 @@ void host_start_watchdog(const int *vblank_counter) {
 #endif
 }
 
+/* What the PS1 kernel leaves in low RAM after boot (psx-spx, "Kernel (BIOS)"). Games that
+ * read through a null pointer see these words; the word at 4 is 275A0C50h on older BIOS. */
+static void seed_kernel_area(void) {
+    volatile uint32_t *low = (volatile uint32_t *)(uintptr_t)PS1_RAM_BASE;
+
+    low[0x00 / 4] = 0x00000003u;    /* garbage area, its first word smashed by CD delays */
+    low[0x04 / 4] = 0x275A0C80u;
+    low[0x08 / 4] = 0x03400008u;
+    low[0x0C / 4] = 0x00000000u;
+    low[0x60 / 4] = 2;              /* RAM size in MB */
+    low[0x64 / 4] = 0x00000000u;
+    low[0x68 / 4] = 0x000000FFu;
+}
+
 int ps1_memory_map(void) {
     if (map_range(PS1_RAM_BASE, PS1_RAM_SIZE, "PS1 RAM") != 0) {
         return -1;
     }
+    seed_kernel_area();
     if (map_range(PS1_SCRATCHPAD_BASE, 0x1000, "PS1 scratchpad") != 0) {
         return -1;
     }

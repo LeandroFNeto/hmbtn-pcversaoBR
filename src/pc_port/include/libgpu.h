@@ -409,8 +409,14 @@ void gpu_clear_frame(void);
 void gpu_debug_reset_clear(void);
 /* Reads the back-buffer pixel at PS1 screen position (x, y). */
 int gpu_debug_read_pixel(int x, int y, unsigned char rgb[3]);
-/* PutDrawEnv: the draw-mode page, and a background clear when isbg is set. */
-void gpu_put_draw_env(u_short tpage, u_char isbg, u_char r, u_char g, u_char b);
+/* PutDrawEnv: the draw-mode page, the clip the frame occupies in VRAM, and a
+ * background clear when isbg is set. */
+void gpu_put_draw_env(u_short tpage, u_char isbg, u_char r, u_char g, u_char b, int x, int y, int w, int h);
+/* Writes the draw-buffer overlap of this rectangle from the back buffer into VRAM. */
+void gpu_refresh_draw_overlap(int x, int y, int w, int h);
+/* Vertex layout. The texture window is a uniform, so these stay put. */
+int gpu_debug_vert_bytes(void);
+int gpu_debug_vert_cap(void);
 /* Draws the host green quad. Does not count as a game ordering table. */
 void gpu_draw_demo(void);
 /* 1 if DrawOTag ran since the previous call. */
@@ -420,5 +426,7 @@ void gpu_debug_game_stats(int *calls, int *packets);
 /* Walks like DrawOTag without drawing; returns the packets of a drawn type. */
 int gpu_debug_walk(u_long *ot);
 int gpu_debug_last_steps(void);
+/* With HMBTN_TRACE=1, logs the black regions of one presented farm frame. */
+void gpu_trace_frame(void);
 
 #endif

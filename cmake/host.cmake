@@ -51,39 +51,106 @@ foreach(dir IN ITEMS
 endforeach()
 get_property(HMBTN_GAME_SOURCES GLOBAL PROPERTY HMBTN_GAME_SOURCES)
 
-# GCC 2.95 accepted constructs modern GCC rejects with no flag to relax them. For those
-# files the host compiles a copy under the build tree with one textual replacement; the
-# file under src/ is never edited.
-function(hmbtn_host_patch relative from to)
+# GCC 2.95 accepted constructs modern GCC rejects or reads differently, with no flag to
+# restore the old meaning. For those files the host compiles a copy under the build tree
+# with textual replacements, given as `from to` pairs and applied in order, each to every
+# occurrence; the file under src/ is never edited. The texts cannot hold a ';' (a CMake
+# list separator).
+function(_hmbtn_write_patched relative)
     set(original ${CMAKE_SOURCE_DIR}/${relative})
     set(patched ${CMAKE_BINARY_DIR}/host_patched/${relative})
-    file(READ ${original} contents)
-    string(FIND "${contents}" "${from}" found)
-    if(found EQUAL -1)
-        message(FATAL_ERROR "hmbtn_host_patch: '${from}' not found in ${relative}")
+    list(LENGTH ARGN count)
+    math(EXPR odd "${count} % 2")
+    if(count EQUAL 0 OR odd)
+        message(FATAL_ERROR "hmbtn_host_patch: ${relative} needs `from to` pairs")
     endif()
-    string(REPLACE "${from}" "${to}" contents "${contents}")
+    file(READ ${original} contents)
+    math(EXPR last "${count} - 2")
+    foreach(i RANGE 0 ${last} 2)
+        math(EXPR j "${i} + 1")
+        list(GET ARGN ${i} from)
+        list(GET ARGN ${j} to)
+        string(FIND "${contents}" "${from}" found)
+        if(found EQUAL -1)
+            message(FATAL_ERROR "hmbtn_host_patch: '${from}' not found in ${relative}")
+        endif()
+        string(REPLACE "${from}" "${to}" contents "${contents}")
+    endforeach()
     file(WRITE ${patched}.tmp "${contents}")
     configure_file(${patched}.tmp ${patched} COPYONLY)
     set_property(DIRECTORY ${CMAKE_SOURCE_DIR} APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${original})
-    list(TRANSFORM HMBTN_GAME_SOURCES REPLACE "^${original}$" "${patched}")
+endfunction()
+
+function(hmbtn_host_patch relative)
+    _hmbtn_write_patched(${relative} ${ARGN})
+    list(TRANSFORM HMBTN_GAME_SOURCES REPLACE "^${CMAKE_SOURCE_DIR}/${relative}$"
+         "${CMAKE_BINARY_DIR}/host_patched/${relative}")
     set(HMBTN_GAME_SOURCES ${HMBTN_GAME_SOURCES} PARENT_SCOPE)
+endfunction()
+
+# The patched header's directory is searched before the game's, except by sources in the
+# header's own directory, whose quote includes find the original first.
+function(hmbtn_host_patch_header relative)
+    _hmbtn_write_patched(${relative} ${ARGN})
+    get_filename_component(dir ${CMAKE_BINARY_DIR}/host_patched/${relative} DIRECTORY)
+    list(APPEND HMBTN_PATCHED_INCLUDE_DIRS ${dir})
+    list(REMOVE_DUPLICATES HMBTN_PATCHED_INCLUDE_DIRS)
+    set(HMBTN_PATCHED_INCLUDE_DIRS ${HMBTN_PATCHED_INCLUDE_DIRS} PARENT_SCOPE)
 endfunction()
 
 # text.h declares these extern; text.c redefines them static.
 hmbtn_host_patch(src/main/text/text.c "static char text_fmt_" "char text_fmt_")
 
+# GCC 2.95 stored the static initializers of a zero-length array after the struct
+# (farm_data.c's tables of contents); modern GCC drops them. A flexible array member keeps
+# them with the same layout.
+set(HMBTN_PATCHED_INCLUDE_DIRS "")
+hmbtn_host_patch_header(src/main/graphics/anim.h "s32 start[0];" "s32 start[];")
+
+# A new game's first farm frame reads the area's place before scene_enter sets
+# farm_area.mode.data, and an area without marked models leaves scene_marked_entries
+# null while their flags are updated. The PS1 reaches its kernel RAM at address 0 there
+# (the write at 0x28 lands in the unused area) and goes on.
+hmbtn_host_patch(src/overlay/11_GF_FARM/world/scene.c
+    "#include \"scene.h\"" "#include \"scene.h\"\n#include <ps1_null.h>"
+    "farm_area.mode.data->head.place" "PS1_NULL_PTR(farm_area.mode.data)->head.place"
+    "scene_marked_entries[0]->" "PS1_NULL_PTR(scene_marked_entries[0])->"
+    "scene_marked_entries[1]->" "PS1_NULL_PTR(scene_marked_entries[1])->")
+
+# A ground probe that finds nothing leaves ground_hit_primitive() null; these readers do
+# not test it, and on the PS1 they read the kernel's word 3 at address 0 ("no ground").
+# farm_probe.c's two readers that do test for null are left alone.
+set(hmbtn_null_include "#include \"types.h\"" "#include \"types.h\"\n#include <ps1_null.h>")
+hmbtn_host_patch(src/overlay/11_GF_FARM/people/player.c ${hmbtn_null_include}
+    "ground_hit_primitive()" "PS1_NULL_PTR(ground_hit_primitive())")
+hmbtn_host_patch(src/overlay/11_GF_FARM/farm_probe.c ${hmbtn_null_include}
+    "*(u8 *)ground_hit_primitive()" "*(u8 *)PS1_NULL_PTR(ground_hit_primitive())")
+hmbtn_host_patch(src/overlay/11_GF_FARM/field/field.c ${hmbtn_null_include}
+    "hit->header & 8" "PS1_NULL_PTR(hit)->header & 8")
+hmbtn_host_patch(src/overlay/11_GF_FARM/field/greenhouse.c ${hmbtn_null_include}
+    "hit->header & FARM_QUAD_CELL_BIT" "PS1_NULL_PTR(hit)->header & FARM_QUAD_CELL_BIT")
+hmbtn_host_patch(src/overlay/11_GF_FARM/field/mine.c ${hmbtn_null_include}
+    "hit->header & FARM_QUAD_CELL_BIT" "PS1_NULL_PTR(hit)->header & FARM_QUAD_CELL_BIT")
+
 file(GLOB HMBTN_PORT_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/pc_port/src/*.c)
 
 add_executable(hmbtn-host ${HMBTN_PORT_SOURCES} ${HMBTN_GAME_SOURCES})
 
+# Every compile goes through host_cc_check.cmake, which fails it if GCC dropped array
+# initializers that GCC 2.95 kept.
+set_target_properties(hmbtn-host PROPERTIES C_COMPILER_LAUNCHER
+    "${CMAKE_COMMAND};-P;${CMAKE_SOURCE_DIR}/cmake/host_cc_check.cmake;--")
+
 target_include_directories(hmbtn-host BEFORE PRIVATE
     ${CMAKE_SOURCE_DIR}/src/pc_port/include
+    ${HMBTN_PATCHED_INCLUDE_DIRS}
     ${HMBTN_GAME_INCLUDE_DIRS})
 
 # The PS1 build passes -D__CHAR_UNSIGNED__; tentative definitions shared across
 # overlays rely on common symbols.
 target_compile_options(hmbtn-host PRIVATE -funsigned-char -fcommon -g)
+# libgte's csqrt is the PS1's integer square root, not C99's complex one.
+target_compile_options(hmbtn-host PRIVATE -fno-builtin-csqrt)
 
 # Renames the decomp's main() to ps1_main in every game translation unit.
 # main_pc.c undefines the macro so the PC entry point stays main().

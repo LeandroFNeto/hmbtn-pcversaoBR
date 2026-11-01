@@ -16,6 +16,7 @@
 #include <host_input.h>
 #include <libetc.h>
 #include <libgpu.h>
+#include <memcard.h>
 #include <ps1_memory.h>
 #include <spu_core.h>
 
@@ -31,6 +32,9 @@ int vram_self_check(void);
 int input_self_check(void);
 int audio_self_check(void);
 int seq_self_check(void);
+int memcard_self_check(void);
+int farm_tables_self_check(void);
+int gte_library_self_check(void);
 
 /* The game spins in CdSearchFile if the archive is missing, so check it first. */
 static int open_disc(void) {
@@ -52,6 +56,7 @@ static int open_disc(void) {
 }
 
 static void teardown(void) {
+    memcard_close();
     gpu_gl_shutdown();
     host_input_shutdown();
     spu_audio_close();
@@ -124,7 +129,8 @@ int main(int argc, char *argv[]) {
         if (selftest != NULL && strcmp(selftest, "1") == 0) {
             cd_drive_open(NULL);
             if (host_frame_self_check() != 0 || vram_self_check() != 0 || input_self_check() != 0 ||
-                audio_self_check() != 0 || seq_self_check() != 0 || cd_drive_self_check() != 0) {
+                audio_self_check() != 0 || seq_self_check() != 0 || cd_drive_self_check() != 0 ||
+                memcard_self_check() != 0 || farm_tables_self_check() != 0 || gte_library_self_check() != 0) {
                 teardown();
                 return 1;
             }

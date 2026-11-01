@@ -1,6 +1,7 @@
 #include <gte.h>
 #include <gtemac.h>
 
+#include <stdint.h>
 #include <string.h>
 
 /* 1.3.12 rotation (4096 == 1), translation, pixel offset, screen distance. */
@@ -106,6 +107,39 @@ static unsigned int flag;
 #define GTE_FLAG_ERROR 0x80000000u
 #define GTE_ZSF3 0x155
 #define GTE_ZSF4 0x100
+
+/* FLAG bits (psx-spx, "GTE Saturation"): MAC1-3 past 43 bits, IR1-3 saturated, and the
+ * error bit, set when any of bits 30..23 or 18..13 is. */
+#define GTE_FLAG_MAC_POS(i) (1u << (30 - (i)))
+#define GTE_FLAG_MAC_NEG(i) (1u << (27 - (i)))
+#define GTE_FLAG_IR(i) (1u << (24 - (i)))
+#define GTE_FLAG_ERROR_BITS 0x7F87E000u
+
+/* Average-Z factors, far color (RFC, GFC, BFC), and depth cueing (DQA, DQB). Only
+ * InitGeom, SetFarColor, and SetFogNear write the last two groups. The back color
+ * and the light and color matrices are stored for the game's setters; no command
+ * the game issues reads them back into a polygon. */
+static int zsf3 = GTE_ZSF3;
+static int zsf4 = GTE_ZSF4;
+static int far_color[3];
+static int back_color[3];
+static short color_matrix[3][3];
+static short light_matrix[3][3];
+static int dqa;
+static int dqb;
+
+static void copy_matrix9(short dst[3][3], const void *m) {
+    const MATRIX *mat;
+    int r;
+    int c;
+
+    mat = (const MATRIX *)m;
+    for (r = 0; r < 3; r++) {
+        for (c = 0; c < 3; c++) {
+            dst[r][c] = mat->m[r][c];
+        }
+    }
+}
 
 static int clamp_s16(int v) {
     if (v < -32768) {
@@ -242,12 +276,12 @@ void gte_h_nclip(void) {
 }
 
 void gte_h_avsz3(void) {
-    mac0 = GTE_ZSF3 * (sz[1] + sz[2] + sz[3]);
+    mac0 = zsf3 * (sz[1] + sz[2] + sz[3]);
     otz = mac0 >> 12;
 }
 
 void gte_h_avsz4(void) {
-    mac0 = GTE_ZSF4 * (sz[0] + sz[1] + sz[2] + sz[3]);
+    mac0 = zsf4 * (sz[0] + sz[1] + sz[2] + sz[3]);
     otz = mac0 >> 12;
 }
 
@@ -371,17 +405,17 @@ void gte_h_ReadRotMatrix(void *m) {
 }
 
 void gte_h_SetBackColor(int r, int g, int b) {
-    (void)r;
-    (void)g;
-    (void)b;
+    back_color[0] = r;
+    back_color[1] = g;
+    back_color[2] = b;
 }
 
 void gte_h_SetColorMatrix(const void *m) {
-    (void)m;
+    copy_matrix9(color_matrix, m);
 }
 
 void gte_h_SetLightMatrix(const void *m) {
-    (void)m;
+    copy_matrix9(light_matrix, m);
 }
 
 void gte_h_MulMatrix0(const void *m0, const void *m1, void *m2) {
@@ -423,4 +457,142 @@ void gte_h_OuterProduct12(const void *v0, const void *v1, void *v2) {
     o[0] = x;
     o[1] = y;
     o[2] = z;
+}
+
+/* MAC i from a 44-bit sum: overflow flags on the sum, then the optional >> 12. MAC keeps
+ * the low 32 bits; IR i saturates the shifted value, to 0..0x7FFF when lm is set. */
+static void store_mac_ir(int i, int64_t sum, int sf, int lm) {
+    int64_t shifted;
+    int64_t low;
+
+    if (sum > INT64_C(0x7FFFFFFFFFF)) {
+        flag |= GTE_FLAG_MAC_POS(i);
+    } else if (sum < -INT64_C(0x80000000000)) {
+        flag |= GTE_FLAG_MAC_NEG(i);
+    }
+    shifted = sf ? sum >> 12 : sum;
+    mac[i] = (int)(int32_t)(uint32_t)shifted;
+    low = lm ? 0 : -0x8000;
+    if (shifted < low) {
+        ir[i] = (int)low;
+        flag |= GTE_FLAG_IR(i);
+    } else if (shifted > 0x7FFF) {
+        ir[i] = 0x7FFF;
+        flag |= GTE_FLAG_IR(i);
+    } else {
+        ir[i] = (int)shifted;
+    }
+}
+
+static void finish(const int64_t sum[3], int sf, int lm, int out[3]) {
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        store_mac_ir(i, sum[i], sf, lm);
+        out[i] = mac[i];
+    }
+    if (flag & GTE_FLAG_ERROR_BITS) {
+        flag |= GTE_FLAG_ERROR;
+    }
+}
+
+void gte_mvmva_rot(const int v[3], int translate, int sf, int lm, int out[3]) {
+    int64_t sum[3];
+    int i;
+
+    flag = 0;
+    for (i = 0; i < 3; i++) {
+        sum[i] = translate ? (int64_t)tr[i] * 4096 : 0;
+        sum[i] += (int64_t)rot[i][0] * (short)v[0] + (int64_t)rot[i][1] * (short)v[1] +
+                  (int64_t)rot[i][2] * (short)v[2];
+    }
+    finish(sum, sf, lm, out);
+}
+
+void gte_op(const int d[3], const int v[3], int sf, int lm, int out[3]) {
+    int64_t sum[3];
+
+    flag = 0;
+    sum[0] = (int64_t)(short)d[1] * (short)v[2] - (int64_t)(short)d[2] * (short)v[1];
+    sum[1] = (int64_t)(short)d[2] * (short)v[0] - (int64_t)(short)d[0] * (short)v[2];
+    sum[2] = (int64_t)(short)d[0] * (short)v[1] - (int64_t)(short)d[1] * (short)v[0];
+    finish(sum, sf, lm, out);
+}
+
+void gte_sqr(const int v[3], int sf, int lm, int out[3]) {
+    int64_t sum[3];
+    int i;
+
+    flag = 0;
+    for (i = 0; i < 3; i++) {
+        sum[i] = (int64_t)(short)v[i] * (short)v[i];
+    }
+    finish(sum, sf, lm, out);
+}
+
+void gte_gpf(int ir0, const int v[3], int sf, int lm, int out[3]) {
+    int64_t sum[3];
+    int i;
+
+    flag = 0;
+    for (i = 0; i < 3; i++) {
+        sum[i] = (int64_t)(short)ir0 * (short)v[i];
+    }
+    finish(sum, sf, lm, out);
+}
+
+int gte_lzc(int value) {
+    uint32_t bits;
+    int count;
+
+    bits = value < 0 ? ~(uint32_t)value : (uint32_t)value;
+    count = 0;
+    while (count < 32 && !(bits & 0x80000000u)) {
+        bits <<= 1;
+        count++;
+    }
+    return count;
+}
+
+unsigned int gte_flag_value(void) {
+    return flag;
+}
+
+void gte_init_geom(void) {
+    zsf3 = 341;
+    zsf4 = 256;
+    screen_h = 1000;
+    off_x = 0;
+    off_y = 0;
+    dqa = -4194;
+    dqb = 0x1400000;
+}
+
+void gte_set_far_color(int r, int g, int b) {
+    far_color[0] = r;
+    far_color[1] = g;
+    far_color[2] = b;
+}
+
+void gte_set_depth_cue(int a, int b) {
+    dqa = a;
+    dqb = b;
+}
+
+void gte_debug_settings(GteSettings *s) {
+    s->screen_h = screen_h;
+    s->off_x = off_x;
+    s->off_y = off_y;
+    s->dqa = dqa;
+    s->dqb = dqb;
+    s->zsf3 = zsf3;
+    s->zsf4 = zsf4;
+    s->far_color[0] = far_color[0];
+    s->far_color[1] = far_color[1];
+    s->far_color[2] = far_color[2];
+    s->back_color[0] = back_color[0];
+    s->back_color[1] = back_color[1];
+    s->back_color[2] = back_color[2];
+    memcpy(s->color_matrix, color_matrix, sizeof(s->color_matrix));
+    memcpy(s->light_matrix, light_matrix, sizeof(s->light_matrix));
 }
