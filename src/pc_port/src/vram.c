@@ -2,6 +2,9 @@
 
 #include <vram.h>
 #include <libgpu.h>
+#include <tmd_vram.h>
+
+#include <SDL.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -152,7 +155,11 @@ uint16_t vram_color15(unsigned r, unsigned g, unsigned b) {
 }
 
 int LoadImage(RECT *rect, u_long *p) {
+    if (rect->w == 14 && rect->h == 1 && (rect->y == 242 || rect->y == 246)) {
+        SDL_Log("picture_load hook: rect(x:%d, y:%d) -> ponteiro p = %p", rect->x, rect->y, (void *)p);
+    }
     vram_load(rect->x, rect->y, rect->w, rect->h, (const uint16_t *)p);
+    tmd_vram_note_rect(0, rect->x, rect->y, rect->w, rect->h);
     return 0;
 }
 
@@ -164,6 +171,7 @@ int StoreImage(RECT *rect, u_long *p) {
 
 int MoveImage(RECT *rect, int x, int y) {
     vram_move(rect->x, rect->y, x, y, rect->w, rect->h);
+    tmd_vram_note_rect(1, x, y, rect->w, rect->h);
     return 0;
 }
 
@@ -173,6 +181,7 @@ int MoveImage2(RECT *rect, int x, int y) {
 
 int ClearImage(RECT *rect, u_char r, u_char g, u_char b) {
     vram_fill(rect->x, rect->y, rect->w, rect->h, vram_color15(r, g, b));
+    tmd_vram_note_rect(2, rect->x, rect->y, rect->w, rect->h);
     if (rect->x < 320 && rect->y < 480 && rect->x + rect->w > 0 && rect->y + rect->h > 0) {
         gpu_clear_screen(r, g, b);
     }

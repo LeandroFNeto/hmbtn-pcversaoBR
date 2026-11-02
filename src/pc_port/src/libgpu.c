@@ -3,6 +3,9 @@
  * (vram.c) through one 1024 x 512 texture. */
 
 #include <libgpu.h>
+#include <object_trace.h>
+#include <objects_dump.h>
+#include <tmd_vram.h>
 #include <ps1_memory.h>
 #include <vram.h>
 #include <farm_state.h>
@@ -107,7 +110,7 @@ static const int attr_sizes[ATTR_COUNT] = {2, 3, 2, 3, 2, 2};
 static GLint attr_loc[ATTR_COUNT];
 
 #define GPU_VERT_MAX 6144
-static GpuVert gpu_verts[GPU_VERT_MAX];
+static GpuVert *gpu_verts;
 static int gpu_vert_count;
 static int batch_subtract;
 
@@ -274,6 +277,13 @@ int gpu_gl_init(void) {
     int missing;
     int i;
 
+    if (gpu_verts == NULL) {
+        gpu_verts = (GpuVert *)malloc((size_t)GPU_VERT_MAX * sizeof(GpuVert));
+        if (gpu_verts == NULL) {
+            SDL_Log("gpu vertex buffer allocation failed");
+            return 1;
+        }
+    }
     missing = 0;
     p_glCreateShader = (PFN_glCreateShader)load_proc("glCreateShader", &missing);
     p_glShaderSource = (PFN_glShaderSource)load_proc("glShaderSource", &missing);
@@ -643,6 +653,33 @@ static void trace_note_e2(u_long word) {
     }
 }
 
+static void object_note_prim(unsigned cmd, const Prim *p);
+
+static void objects_from_prim(unsigned cmd, const Prim *p) {
+    short xy[8];
+    int i;
+
+    if (!objects_dump_collecting() && !tmd_vram_collecting()) {
+        return;
+    }
+    for (i = 0; i < 8; i++) {
+        xy[i] = 0;
+    }
+    for (i = 0; i < p->count && i < 4; i++) {
+        xy[i * 2] = (short)p->v[i].x;
+        xy[i * 2 + 1] = (short)p->v[i].y;
+    }
+    if (objects_dump_collecting()) {
+        objects_dump_note_drawn(cmd, p->count, xy, (int)(p->v[0].r * 255.0f + 0.5f), (int)(p->v[0].g * 255.0f + 0.5f),
+                                (int)(p->v[0].b * 255.0f + 0.5f), p->depth > 0.0f, (int)p->v[0].u, (int)p->v[0].v,
+                                (int)p->page_x, (int)p->page_y, (int)p->clut_x, (int)p->clut_y, (int)p->depth);
+    }
+    if (tmd_vram_collecting()) {
+        tmd_vram_note_drawn(cmd, p->count, xy, p->depth > 0.0f, (int)p->v[0].u, (int)p->v[0].v, (int)p->page_x,
+                            (int)p->page_y, (int)p->clut_x, (int)p->clut_y, (int)p->depth);
+    }
+}
+
 /* Polygon commands 0x20-0x3F. Returns 0 when the packet is too short for its layout. */
 static int decode_poly(const u_long *w, int avail, int emit) {
     unsigned cmd;
@@ -700,6 +737,8 @@ static int decode_poly(const u_long *w, int avail, int emit) {
     if (host_tracing()) {
         trace_note_prim(cmd, &p);
     }
+    object_note_prim(cmd, &p);
+    objects_from_prim(cmd, &p);
     return 1;
 }
 
@@ -767,6 +806,8 @@ static int decode_rect(const u_long *w, int avail, int emit) {
     if (host_tracing()) {
         trace_note_prim(cmd, &p);
     }
+    object_note_prim(cmd, &p);
+    objects_from_prim(cmd, &p);
     return 1;
 }
 
@@ -779,16 +820,40 @@ static int run_packet(const u_long *w, int len, int emit) {
     while (i < len) {
         cmd = (unsigned)(w[i] >> 24);
         if (cmd >= 0x20 && cmd <= 0x3F) {
-            return decode_poly(w + i, len - i, emit);
+            int drew;
+
+            drew = decode_poly(w + i, len - i, emit);
+            if (emit && drew) {
+                object_trace_count_poly();
+            }
+            return drew;
         }
         if (cmd >= 0x60 && cmd <= 0x7F) {
-            return decode_rect(w + i, len - i, emit);
+            int drew;
+
+            drew = decode_rect(w + i, len - i, emit);
+            if (emit && drew) {
+                object_trace_count_rect();
+            }
+            return drew;
         }
         if (cmd >= 0x40 && cmd <= 0x5F) {
             if (emit && host_tracing()) {
                 trace_note_line(cmd, len - i, i + trace_line_words(cmd) < len ? (unsigned)(w[i + trace_line_words(cmd)] >> 24) : 0);
             }
+            if (emit) {
+                int words;
+                int next;
+
+                words = trace_line_words(cmd);
+                next = i + words < len ? (int)(w[i + words] >> 24) : -1;
+                object_trace_count_line(len - i > words);
+                objects_dump_note_skip(cmd, next);
+            }
             return 0;
+        }
+        if (emit) {
+            object_trace_count_other(cmd == 0xE6);
         }
         if (cmd == 0x02 && emit && host_tracing()) {
             trace_note_fill(len - i, i + 3 < len ? (unsigned)(w[i + 3] >> 24) : 0);
@@ -1155,6 +1220,68 @@ static unsigned trace_word(const TracePrim *p, float px, float py, int i0, int i
     return vram[y & 511][x & 1023];
 }
 
+static void object_note_prim(unsigned cmd, const Prim *p) {
+    short xy[8];
+    TracePrim sample;
+    int i;
+    int covers;
+    int i0;
+    int i1;
+    int i2;
+    int tu;
+    int tv;
+    unsigned word;
+
+    if (!object_trace_collecting()) {
+        return;
+    }
+    for (i = 0; i < 4; i++) {
+        xy[i * 2] = 0;
+        xy[i * 2 + 1] = 0;
+    }
+    for (i = 0; i < p->count && i < 4; i++) {
+        xy[i * 2] = (short)p->v[i].x;
+        xy[i * 2 + 1] = (short)p->v[i].y;
+    }
+    covers = 0;
+    i0 = 0;
+    i1 = 1;
+    i2 = 2;
+    if (p->count >= 3 &&
+        trace_inside(160.0f, 120.0f, p->v[0].x, p->v[0].y, p->v[1].x, p->v[1].y, p->v[2].x, p->v[2].y)) {
+        covers = 1;
+    } else if (p->count == 4 &&
+               trace_inside(160.0f, 120.0f, p->v[1].x, p->v[1].y, p->v[3].x, p->v[3].y, p->v[2].x, p->v[2].y)) {
+        covers = 1;
+        i0 = 1;
+        i1 = 3;
+        i2 = 2;
+    }
+    word = 0;
+    if (covers && p->depth > 0.0f) {
+        memset(&sample, 0, sizeof(sample));
+        sample.n = (unsigned char)p->count;
+        sample.depth = (unsigned char)p->depth;
+        sample.page_x = (short)p->page_x;
+        sample.page_y = (short)p->page_y;
+        sample.clut_x = (short)p->clut_x;
+        sample.clut_y = (short)p->clut_y;
+        sample.tw_mask_x = (short)tw_mask_x;
+        sample.tw_mask_y = (short)tw_mask_y;
+        sample.tw_off_x = (short)tw_off_x;
+        sample.tw_off_y = (short)tw_off_y;
+        for (i = 0; i < p->count && i < 4; i++) {
+            sample.x[i] = xy[i * 2];
+            sample.y[i] = xy[i * 2 + 1];
+            sample.u[i] = (unsigned char)p->v[i].u;
+            sample.v[i] = (unsigned char)p->v[i].v;
+        }
+        word = trace_word(&sample, 160.0f, 120.0f, i0, i1, i2, &tu, &tv);
+    }
+    object_trace_note_drawn(cmd, p->count, xy, (int)(p->v[0].r * 255.0f + 0.5f), (int)(p->v[0].g * 255.0f + 0.5f),
+                            (int)(p->v[0].b * 255.0f + 0.5f), p->depth > 0.0f, word, covers);
+}
+
 static int trace_on_farm(int scene) {
     /* SCENE_FARM, the minigame return, and the load/save/menu/staff returns. */
     return scene == 2 || scene == 6 || scene == 14 || scene == 15 || scene == 19 || scene == 20;
@@ -1231,6 +1358,56 @@ static void trace_save_view(const char *region, int ox, int oy, int vw, int vh) 
     }
     fclose(out);
     SDL_Log("trace gpu: saved %s", path);
+}
+
+int gpu_fill_black_grid(unsigned char grid[60][80]) {
+    GLint viewport[4];
+    int x;
+    int y;
+    int vw;
+    int vh;
+
+    if (!gpu_ready) {
+        return 0;
+    }
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    vw = viewport[2];
+    vh = viewport[3];
+    if (vw <= 0 || vh <= 0 || vw > 2048) {
+        return 0;
+    }
+    memset(grid, 0, 60 * 80);
+    for (y = 0; y < 60; y++) {
+        int py;
+        int gy;
+
+        py = (int)(((float)(y * 4 + 2) + 0.5f) * (float)vh / 240.0f);
+        gy = vh - 1 - py;
+        if (gy < 0) {
+            gy = 0;
+        }
+        if (gy >= vh) {
+            gy = vh - 1;
+        }
+        glReadPixels(viewport[0], viewport[1] + gy, vw, 1, GL_RGBA, GL_UNSIGNED_BYTE, refresh_rgba);
+        for (x = 0; x < 80; x++) {
+            int px;
+            unsigned char *pix;
+
+            px = (int)(((float)(x * 4 + 2) + 0.5f) * (float)vw / 320.0f);
+            if (px < 0) {
+                px = 0;
+            }
+            if (px >= vw) {
+                px = vw - 1;
+            }
+            pix = refresh_rgba + (size_t)px * 4u;
+            if (pix[0] < 8 && pix[1] < 8 && pix[2] < 8) {
+                grid[y][x] = 1;
+            }
+        }
+    }
+    return 1;
 }
 
 /* Reads one presented frame while tracing and logs decision 4: a non-zero texture

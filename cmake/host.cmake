@@ -101,6 +101,12 @@ endfunction()
 # text.h declares these extern; text.c redefines them static.
 hmbtn_host_patch(src/main/text/text.c "static char text_fmt_" "char text_fmt_")
 
+# The object dump reads the frustum planes and the view point. The functions that
+# write them stay as they are; only the static keyword is lifted so the host can see them.
+hmbtn_host_patch(src/main/geometry/model.c
+    "static ClipPlane clip_planes[4];" "ClipPlane clip_planes[4];"
+    "static VECTOR view_direction;" "VECTOR view_direction;")
+
 # GCC 2.95 stored the static initializers of a zero-length array after the struct
 # (farm_data.c's tables of contents); modern GCC drops them. A flexible array member keeps
 # them with the same layout.
@@ -132,7 +138,14 @@ hmbtn_host_patch(src/overlay/11_GF_FARM/field/greenhouse.c ${hmbtn_null_include}
 hmbtn_host_patch(src/overlay/11_GF_FARM/field/mine.c ${hmbtn_null_include}
     "hit->header & FARM_QUAD_CELL_BIT" "PS1_NULL_PTR(hit)->header & FARM_QUAD_CELL_BIT")
 
+# harvest_helper_timer_tick calls the cue with an empty argument list. On the PS1 the
+# helper is still in a0. On x86 that leaves self null and taskId is read at address 0x2A.
+hmbtn_host_patch(src/overlay/11_GF_FARM/people/harvest_sprites.c
+    "        action();" "        action(helper);")
+
 file(GLOB HMBTN_PORT_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/pc_port/src/*.c)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/objects_dump.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/tmd_vram.c PROPERTIES COMPILE_FLAGS -Os)
 
 add_executable(hmbtn-host ${HMBTN_PORT_SOURCES} ${HMBTN_GAME_SOURCES})
 

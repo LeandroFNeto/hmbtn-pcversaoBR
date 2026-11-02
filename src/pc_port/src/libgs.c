@@ -1,6 +1,7 @@
 /* libgs: the game uses its work base, offsets, and screen size globals. */
 
 #include <libgs.h>
+#include <object_trace.h>
 
 MATRIX GsIDMATRIX = {{{ONE, 0, 0}, {0, ONE, 0}, {0, 0, ONE}}, {0, 0, 0}};
 u_short HWD0 = 320;
@@ -47,18 +48,67 @@ void GsSetProjection(long h) {
     (void)h;
 }
 
+static GsF_LIGHT flat_light[3];
+static int flat_light_set[3];
+static int ambient_rgb[3];
+static int ambient_set;
+static int light_mode;
+static int light_mode_set;
+
 int GsSetFlatLight(int id, GsF_LIGHT *lt) {
-    (void)id;
-    (void)lt;
+    if (id >= 0 && id < 3 && lt != NULL) {
+        flat_light[id] = *lt;
+        flat_light_set[id] = 1;
+    }
     return 0;
 }
 
 void GsSetLightMode(int mode) {
-    (void)mode;
+    light_mode = mode;
+    light_mode_set = 1;
 }
 
 void GsSetAmbient(long r, long g, long b) {
-    (void)r;
-    (void)g;
-    (void)b;
+    ambient_rgb[0] = (int)r;
+    ambient_rgb[1] = (int)g;
+    ambient_rgb[2] = (int)b;
+    ambient_set = 1;
+}
+
+int gs_debug_flat_light(int id, int *r, int *g, int *b) {
+    if (id < 0 || id > 2 || !flat_light_set[id]) {
+        return 0;
+    }
+    *r = flat_light[id].r;
+    *g = flat_light[id].g;
+    *b = flat_light[id].b;
+    return 1;
+}
+
+int gs_debug_ambient(int *r, int *g, int *b) {
+    if (!ambient_set) {
+        return 0;
+    }
+    *r = ambient_rgb[0];
+    *g = ambient_rgb[1];
+    *b = ambient_rgb[2];
+    return 1;
+}
+
+int gs_debug_flat_dir(int id, int *vx, int *vy, int *vz) {
+    if (id < 0 || id > 2 || !flat_light_set[id]) {
+        return 0;
+    }
+    *vx = (int)flat_light[id].vx;
+    *vy = (int)flat_light[id].vy;
+    *vz = (int)flat_light[id].vz;
+    return 1;
+}
+
+int gs_debug_light_mode(int *mode) {
+    if (!light_mode_set) {
+        return 0;
+    }
+    *mode = light_mode;
+    return 1;
 }

@@ -1,5 +1,8 @@
 #include <host.h>
 #include <libgpu.h>
+#include <object_trace.h>
+#include <objects_dump.h>
+#include <tmd_vram.h>
 
 #include <SDL.h>
 #include <GL/gl.h>
@@ -53,7 +56,15 @@ void host_clear(void) {
 }
 
 void host_present(void) {
+    const unsigned char *keys;
+    int f8;
+
+    keys = SDL_GetKeyboardState(NULL);
+    f8 = keys != NULL && keys[SDL_SCANCODE_F8] != 0;
     gpu_trace_frame();
+    objects_dump_present(f8);
+    object_trace_present(f8);
+    tmd_vram_present(f8);
     SDL_GL_SwapWindow(host_window);
     host_clear();
 }

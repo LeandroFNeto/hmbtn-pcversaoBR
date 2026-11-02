@@ -428,5 +428,7 @@ int gpu_debug_walk(u_long *ot);
 int gpu_debug_last_steps(void);
 /* With HMBTN_TRACE=1, logs the black regions of one presented farm frame. */
 void gpu_trace_frame(void);
+/* Fills a 80 by 60 grid, one cell per 4 pixels. A cell is 1 when its sample is black. */
+int gpu_fill_black_grid(unsigned char grid[60][80]);
 
 #endif

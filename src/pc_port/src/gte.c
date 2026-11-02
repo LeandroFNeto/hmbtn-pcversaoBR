@@ -1,5 +1,7 @@
 #include <gte.h>
 #include <gtemac.h>
+#include <object_trace.h>
+#include <objects_dump.h>
 
 #include <stdint.h>
 #include <string.h>
@@ -239,6 +241,7 @@ void gte_h_ldclmv(const void *m) {
 void gte_h_rtps(void) {
     flag = 0;
     push_screen(0);
+    object_trace_rtps(sxy[2][0], sxy[2][1]);
 }
 
 void gte_h_rtpt(void) {
@@ -246,6 +249,7 @@ void gte_h_rtpt(void) {
     push_screen(0);
     push_screen(1);
     push_screen(2);
+    object_trace_rtpt();
 }
 
 static void mul_rot(const int v[3]) {
@@ -273,6 +277,8 @@ void gte_h_rtir(void) {
 void gte_h_nclip(void) {
     mac0 = sxy[0][0] * sxy[1][1] + sxy[1][0] * sxy[2][1] + sxy[2][0] * sxy[0][1] -
            sxy[0][0] * sxy[2][1] - sxy[1][0] * sxy[0][1] - sxy[2][0] * sxy[1][1];
+    object_trace_nclip();
+    objects_dump_note_nclip(mac0);
 }
 
 void gte_h_avsz3(void) {
@@ -325,10 +331,13 @@ void gte_h_stsxy3(void *p, int off0, int off1, int off2) {
 
 void gte_h_stflg(void *p) {
     store_word(p, (int)flag);
+    object_trace_stflg((int)flag);
+    objects_dump_note_flag((int)flag);
 }
 
 void gte_h_stopz(void *p) {
     store_word(p, mac0);
+    object_trace_stopz(mac0, sxy[0][0], sxy[0][1], sxy[1][0], sxy[1][1], sxy[2][0], sxy[2][1]);
 }
 
 void gte_h_stotz(void *p) {

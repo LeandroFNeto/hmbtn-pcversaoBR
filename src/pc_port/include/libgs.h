@@ -35,5 +35,8 @@ void GsSetOffset(long x, long y);
 void GsSetDrawBuffOffset(void);
 void GsInit3D(void);
 void GsSetWorkBase(PACKET *base);
+int GsSetFlatLight(int id, GsF_LIGHT *lt);
+void GsSetLightMode(int mode);
+void GsSetAmbient(long r, long g, long b);
 
 #endif

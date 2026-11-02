@@ -7,6 +7,7 @@
 #include <cd_drive.h>
 #include <gte.h>
 #include <libgte.h>
+#include <object_trace.h>
 
 #include <SDL.h>
 
@@ -408,6 +409,7 @@ void PushMatrix(void) {
         return;
     }
     gte_h_ReadRotMatrix(&matrix_stack[matrix_depth++]);
+    object_trace_push();
 }
 
 void PopMatrix(void) {
@@ -418,6 +420,7 @@ void PopMatrix(void) {
         return;
     }
     matrix_depth--;
+    object_trace_pop();
     SetRotMatrix(&matrix_stack[matrix_depth]);
     SetTransMatrix(&matrix_stack[matrix_depth]);
 }

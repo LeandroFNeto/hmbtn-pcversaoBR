@@ -35,6 +35,9 @@ int seq_self_check(void);
 int memcard_self_check(void);
 int farm_tables_self_check(void);
 int gte_library_self_check(void);
+int object_trace_self_check(void);
+int objects_dump_self_check(void);
+int tmd_vram_self_check(void);
 
 /* The game spins in CdSearchFile if the archive is missing, so check it first. */
 static int open_disc(void) {
@@ -130,7 +133,8 @@ int main(int argc, char *argv[]) {
             cd_drive_open(NULL);
             if (host_frame_self_check() != 0 || vram_self_check() != 0 || input_self_check() != 0 ||
                 audio_self_check() != 0 || seq_self_check() != 0 || cd_drive_self_check() != 0 ||
-                memcard_self_check() != 0 || farm_tables_self_check() != 0 || gte_library_self_check() != 0) {
+                memcard_self_check() != 0 || farm_tables_self_check() != 0 || gte_library_self_check() != 0 ||
+                objects_dump_self_check() != 0 || object_trace_self_check() != 0 || tmd_vram_self_check() != 0) {
                 teardown();
                 return 1;
             }
