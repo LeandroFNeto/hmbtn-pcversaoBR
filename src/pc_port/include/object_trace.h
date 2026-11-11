@@ -7,7 +7,8 @@
 int object_trace_collecting(void);
 
 /* Host present: flush a collection that is already running, then arm the next
- * frame on a rising F8 edge when the dump switch is on. */
+ * frame on a rising F8 edge when the dump switch is on. Each new press arms
+ * another frame. Holding F8 does not. */
 void object_trace_present(int f8_down);
 
 /* Self-check. force_enabled -1 uses the environment variable. */

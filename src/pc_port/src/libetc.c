@@ -2,9 +2,11 @@
  * registered callback, polls window events, presents, and paces to 59.94 Hz. */
 
 #include <libetc.h>
+#include <event_guard.h>
 #include <host.h>
 #include <host_input.h>
 #include <libgpu.h>
+#include <texture_cache.h>
 
 #include <SDL.h>
 
@@ -105,7 +107,9 @@ static void trace_scene(void) {
 static void host_vblank(void) {
     int drew;
 
+    event_guard_apply();
     vblank_count++;
+    texture_cache_tick((uint32_t)vblank_count);
     trace_scene();
     drew = host_render_vblank();
     poll_events();

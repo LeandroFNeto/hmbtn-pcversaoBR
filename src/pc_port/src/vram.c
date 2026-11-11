@@ -1,5 +1,7 @@
 /* The host VRAM and the libgpu transfers into, out of, and inside it. */
 
+#include <model_tex.h>
+#include <mods.h>
 #include <vram.h>
 #include <libgpu.h>
 #include <tmd_vram.h>
@@ -26,11 +28,19 @@ void vram_set_resolver(TextureResolver r) {
 }
 
 TextureSource texture_resolve(int page_x, int page_y, int depth, int clut_x, int clut_y, int u0, int v0,
-                              int u1, int v1) {
+                              int u1, int v1, const void *packet) {
+    unsigned model;
+
+    if (packet != NULL) {
+        model = mods_lookup_model(model_tex_lookup(packet));
+        if (model != 0) {
+            return (TextureSource)model;
+        }
+    }
     if (resolver != NULL) {
         return resolver(page_x, page_y, depth, clut_x, clut_y, u0, v0, u1, v1);
     }
-    return TEXTURE_FROM_VRAM;
+    return (TextureSource)mods_lookup(page_x, page_y, u0, v0, u1, v1);
 }
 
 static void mark_dirty(int y, int h) {
@@ -170,7 +180,13 @@ int StoreImage(RECT *rect, u_long *p) {
 }
 
 int MoveImage(RECT *rect, int x, int y) {
+    int capture;
+
+    capture = gpu_album_prepare(rect->x, rect->y, x, y, rect->w, rect->h);
     vram_move(rect->x, rect->y, x, y, rect->w, rect->h);
+    if (capture) {
+        gpu_album_note(rect->x, rect->y, x, y, rect->w, rect->h);
+    }
     tmd_vram_note_rect(1, x, y, rect->w, rect->h);
     return 0;
 }

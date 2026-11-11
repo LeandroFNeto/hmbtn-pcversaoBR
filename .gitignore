@@ -6,3 +6,6 @@ __pycache__/
 /sdk/bin/
 /objdiff.json
 /baserom.bin
+/f8-captures.txt
+/hmbtn-host.log
+/f8-*.bmp

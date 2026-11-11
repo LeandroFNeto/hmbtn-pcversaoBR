@@ -2,6 +2,8 @@
 
 #include <spu_core.h>
 #include <seq_player.h>
+#include <audio_ringbuffer.h>
+#include <audio_worker.h>
 
 #include <SDL.h>
 
@@ -41,7 +43,7 @@ static uint32_t start_counter;
 static SDL_AudioDeviceID audio_dev;
 static int32_t mix_acc[4096 * 2];
 
-#define DUMP_SECONDS 20
+#define DUMP_SECONDS 16
 static int16_t dump_buf[DUMP_SECONDS * SPU_RATE * 2];
 static uint32_t dump_frames;
 static int dump_enabled;
@@ -415,7 +417,7 @@ static void SDLCALL audio_callback(void *userdata, Uint8 *stream, int len) {
 
     (void)userdata;
     frames = len / 4;
-    spu_render((int16_t *)stream, frames);
+    audio_ringbuffer_read((int16_t *)stream, frames);
     if (dump_enabled && dump_frames < DUMP_SECONDS * SPU_RATE) {
         room = DUMP_SECONDS * SPU_RATE - dump_frames;
         n = (uint32_t)frames < room ? (uint32_t)frames : room;
@@ -453,6 +455,8 @@ void spu_audio_open(void) {
     }
     SDL_Log("audio: %d Hz, format 0x%04X, %d channels, %d frames", have.freq, have.format, have.channels,
             have.samples);
+    audio_ringbuffer_init();
+    audio_worker_start();
     SDL_PauseAudioDevice(audio_dev, 0);
 }
 
@@ -461,6 +465,7 @@ int spu_audio_is_open(void) {
 }
 
 void spu_audio_pause(int paused) {
+    audio_worker_pause(paused);
     if (audio_dev != 0) {
         SDL_PauseAudioDevice(audio_dev, paused);
     }
@@ -504,6 +509,8 @@ static void write_dump(void) {
 }
 
 void spu_audio_close(void) {
+    audio_worker_stop();
+    audio_ringbuffer_clear();
     if (audio_dev != 0) {
         SDL_CloseAudioDevice(audio_dev);
         audio_dev = 0;

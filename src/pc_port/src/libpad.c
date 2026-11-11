@@ -2,6 +2,7 @@
  * PadInitDirect; each vblank the host writes port 1's from the PC's input. */
 
 #include <libpad.h>
+#include <event_guard.h>
 #include <host_input.h>
 
 #include <stddef.h>
@@ -31,6 +32,7 @@ void PadStartCom(void) {
 }
 
 int PadGetState(int port) {
+    event_guard_apply();
     if (port == PAD_PORT1 && pad_started && pad_buffer[0] != NULL) {
         return PadStateStable;
     }

@@ -6,18 +6,22 @@ Presents an OpenGL framebuffer in the existing SDL window on every loop iteratio
 ## Requirements
 
 ### Requirement: The window still closes
-The host loop SHALL keep a 640 by 480 window and SHALL leave the loop when the window close event arrives.
+The host SHALL keep a 640 by 480 window and SHALL end the process with code 0 when the window close event arrives, including while the game is waiting inside `VSync`.
 
 #### Scenario: Close button
 - **WHEN** the host executable is running and the window close control is activated
 - **THEN** the loop ends and the process returns
 
+#### Scenario: Close while the game waits
+- **WHEN** the window close control is activated while `ps1_main` is inside a blocking `VSync`
+- **THEN** the process exits with code 0
+
 ### Requirement: Each iteration presents OpenGL
-Each pass of the host loop SHALL clear an OpenGL framebuffer and present it in the SDL window.
+Each vblank waited by a blocking `VSync` SHALL present the OpenGL framebuffer when something was drawn since the previous presentation, and SHALL clear the framebuffer after presenting.
 
 #### Scenario: Frame is presented
-- **WHEN** the host executable has been running for at least one loop iteration
-- **THEN** the window shows the OpenGL framebuffer from that iteration
+- **WHEN** the host executable has been running for at least one blocking `VSync`
+- **THEN** the window shows the OpenGL framebuffer from that vblank
 
 ### Requirement: No new third-party package
 The host configuration SHALL obtain OpenGL from the system import library already available to MinGW. It SHALL NOT require a package other than the SDL2 directory the host build already uses.

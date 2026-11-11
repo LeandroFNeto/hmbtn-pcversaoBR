@@ -1,0 +1,11 @@
+# Tasks
+
+## 1. The bin polygon samples the item picture
+
+- [x] 1.1 Call `picture_load_to_vram(0x064)` when `farm_area.mode.place.location` becomes `PLACE_FARM`, `PLACE_4`, or `PLACE_5`, and not again until the place changes. Redirect only a primitive whose page and UV min and max equal the stored bin row onto that cell's page, UV, and CLUT. Leave the vertices alone. Leave the stored row empty until a farm log fills it. If the call returns 0 or the cell's texels are word `0x0000`, leave the redirect off. Verify `HMBTN_SELFTEST=1`: with the place set to the farm, a constructed bin polygon and a constructed cell whose texel is non-zero read that color; the same polygon on the coop and the barn reads that color; the same polygon outside those areas keeps the cleared sample; a second polygon on the bin's page with a different UV keeps the cleared sample; a cell of word `0x0000` does not paint a substitute color; a BMP that matches the constructed polygon reads the BMP color. Restore the place the check found. Verify `git diff -- src/main src/overlay src/include` is empty and `model.c` has no new patch.
+
+- [x] 1.2 Update `README.md` in the same turn as 1.1. The resolved row states that a constructed shipping-bin polygon reads the item picture's color on the farm, the coop, and the barn, and that a neighbor polygon keeps its calculated sample. "Ainda falta" keeps the in-game black square until 2.1, and keeps the door, the bed, the chest, and the black scenery.
+
+## 2. One view of the bin
+
+- [x] 2.1 Build the host and capture one farm frame of the black square with `HMBTN_TMD_VRAM=1`. Paste the logged page and UV of the polygon that covers it. Store that row only when the picture cell has a non-zero pixel and the polygon does not also cover the tree. If the picture is empty, or the polygon also covers the tree, leave this task open and do not store the row. Verify `git diff -- src/main src/overlay src/include` is empty. Update `README.md`: a frame that shows the bin in the item picture moves it to "Já resolvido"; an empty picture or a shared polygon stays in "Ainda falta" with this task named. Verified 2026-11-10 in the running game after the `gte_rtv0` translation fix (`pc-port-rtv0-translation`): the object now draws in place and animates; the host forced-color and bed hacks are no longer needed.

@@ -26,6 +26,8 @@ int host_game_has_drawn(void);
 /* For the frame checks: forget that a check's callback drew. */
 void host_debug_reset_game_drawn(void);
 int host_vblank_count(void);
+/* The f8-NNN.bmp index written by the latest rising F8, or 0 before the first. */
+int host_f8_index(void);
 const int *host_vblank_counter(void);
 
 /* 1 when HMBTN_TRACE=1: scene changes and memory card calls go to the log. */

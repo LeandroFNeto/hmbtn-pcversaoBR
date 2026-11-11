@@ -411,8 +411,8 @@ static int check_gpu_fixes(void) {
     int off;
     unsigned word;
 
-    failed = check(gpu_debug_vert_bytes() == 56 && gpu_debug_vert_cap() == 6144,
-                   "the vertex is 56 bytes and the buffer holds 6144");
+    failed = check(gpu_debug_vert_bytes() == 60 && gpu_debug_vert_cap() == 6144,
+                   "the vertex is 60 bytes and the buffer holds 6144");
 
     gte_SetBackColor(10, 20, 30);
     host_clear();

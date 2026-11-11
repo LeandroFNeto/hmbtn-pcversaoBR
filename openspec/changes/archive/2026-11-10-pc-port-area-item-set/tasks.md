@@ -1,0 +1,11 @@
+# Tasks
+
+## 1. The stand-in follows the area and the rectangle
+
+- [x] 1.1 Replace the point test in `mark_forced_hole` with the host table from design.md decisions 1 and 2. The bin row is page `320,0`, UV `(240, 236)`–`(252, 248)`, armed for `PLACE_FARM`, `PLACE_4`, and `PLACE_5`. The door row is page `384,0`, UV `(216, 153)`–`(228, 165)`, armed for `PLACE_FARM` only. The flag reads `farm_area.mode.place.location`. A larger UV rectangle that contains `(246, 242)` does not match. Verify `HMBTN_SELFTEST=1`: with the place set to the farm, the bin rectangle with word `0x0000` reads `128,128,128` and a wider rectangle on page `320,0` that contains `(246, 242)` leaves the cleared color; with the place set to the coop and to the barn, the bin rectangle reads `128,128,128`; with the place set to another area, the bin rectangle leaves the cleared color; the door rectangle reads its corner color on the farm and leaves the cleared color off the farm; a BMP for the bin rectangle still reads the BMP color. Restore the place the check found. Verify `git diff -- src/main src/overlay src/include` is empty.
+
+- [x] 1.2 Update `README.md` in the same turn as 1.1. The resolved row states that the bin stand-in is on only for the farm, the coop, and the barn, the door stand-in is on only for the farm, and a larger rectangle that only contains the measured point stays discarded. "Ainda falta" keeps an in-game farm view until 2.1, and keeps the bed, the chest, and the black scenery.
+
+## 2. One view of the farm
+
+- [x] 2.1 Build the host and capture one frame on the farm facing the shipping bin and the next tree. Verify the tree is not the gray stand-in. Paste the logged page and UV of the polygon that contains `(246, 242)`. If that UV is not `(240, 236)`–`(252, 248)`, leave this task open and do not widen the bin row. Verify `git diff -- src/main src/overlay src/include` is empty. Update `README.md`: a capture that shows the tree in its own texture moves the tree to "Já resolvido"; a UV that is not the bin row stays in "Ainda falta" with this task named. Verified 2026-11-10 in the running game after the `gte_rtv0` translation fix (`pc-port-rtv0-translation`): the object now draws in place and animates; the host forced-color and bed hacks are no longer needed.

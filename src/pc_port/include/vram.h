@@ -40,6 +40,6 @@ typedef TextureSource (*TextureResolver)(int page_x, int page_y, int depth, int 
                                          int u0, int v0, int u1, int v1);
 void vram_set_resolver(TextureResolver resolver);
 TextureSource texture_resolve(int page_x, int page_y, int depth, int clut_x, int clut_y, int u0, int v0,
-                              int u1, int v1);
+                              int u1, int v1, const void *packet);
 
 #endif

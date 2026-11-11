@@ -414,6 +414,11 @@ int gpu_debug_read_pixel(int x, int y, unsigned char rgb[3]);
 void gpu_put_draw_env(u_short tpage, u_char isbg, u_char r, u_char g, u_char b, int x, int y, int w, int h);
 /* Writes the draw-buffer overlap of this rectangle from the back buffer into VRAM. */
 void gpu_refresh_draw_overlap(int x, int y, int w, int h);
+/* 1 when this copy's destination overlaps the album scratch and its source overlaps the
+ * draw clip. The source overlap is read from the back buffer before the caller moves. */
+int gpu_album_prepare(int sx, int sy, int dx, int dy, int w, int h);
+/* Logs the first prepared copy in the session, after the move has written the destination. */
+void gpu_album_note(int sx, int sy, int dx, int dy, int w, int h);
 /* Vertex layout. The texture window is a uniform, so these stay put. */
 int gpu_debug_vert_bytes(void);
 int gpu_debug_vert_cap(void);
@@ -428,6 +433,10 @@ int gpu_debug_walk(u_long *ot);
 int gpu_debug_last_steps(void);
 /* With HMBTN_TRACE=1, logs the black regions of one presented farm frame. */
 void gpu_trace_frame(void);
+void gpu_trace_camera(void);
+/* Writes f8-NNN.bmp of the current back buffer. place and scene are the farm
+ * script values, or -1 when that script is not current. Returns 0 on success. */
+int gpu_save_f8(int index, int *place, int *scene);
 /* Fills a 80 by 60 grid, one cell per 4 pixels. A cell is 1 when its sample is black. */
 int gpu_fill_black_grid(unsigned char grid[60][80]);
 

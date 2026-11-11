@@ -56,7 +56,6 @@ typedef struct Drawn {
 
 static int collecting;
 static int key_collect;
-static int dumped;
 static int f8_was;
 static int force_enabled = -1;
 
@@ -230,6 +229,53 @@ static int tri_black(const Drawn *prim) {
     return 0;
 }
 
+static int group_was_drawn(const Group *g) {
+    int t;
+    int d;
+
+    for (t = 0; t < g->tri_n; t++) {
+        for (d = 0; d < drawn_n; d++) {
+            if (verts_match(&g->tri[t], &drawn[d])) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The bed center sits outside the central half, so the half-window report can miss it. */
+static void log_bed_group(void) {
+    int best;
+    int best_d;
+    int i;
+
+    best = -1;
+    best_d = 0;
+    for (i = 0; i < done_n; i++) {
+        int dx;
+        int dy;
+        int d;
+
+        if (!done_group[i].has_xy) {
+            continue;
+        }
+        dx = done_group[i].sx - 254;
+        dy = done_group[i].sy - 170;
+        d = dx * dx + dy * dy;
+        if (best < 0 || d < best_d) {
+            best = i;
+            best_d = d;
+        }
+    }
+    if (best < 0) {
+        add_line("trace object: bed 254,170 nearest none");
+        return;
+    }
+    add_line("trace object: bed 254,170 nearest x %d y %d nclip_fail %d nclip_pass %d drawn %d", done_group[best].sx,
+             done_group[best].sy, done_group[best].nclip_fail, done_group[best].nclip_pass,
+             group_was_drawn(&done_group[best]));
+}
+
 static const char *outcome_name(const Group *g, int cover_black, int cover_any) {
     if (g->rtpt == 0) {
         return "never entered its primitive pass";
@@ -304,6 +350,7 @@ static void flush_log(void) {
     if (group_overflow) {
         add_line("trace object: groups overflow");
     }
+    log_bed_group();
 
     for (i = 0; i < report_n; i++) {
         Group *g;
@@ -353,10 +400,9 @@ void object_trace_present(int f8_down) {
         flush_log();
         collecting = 0;
         key_collect = 0;
-        dumped = 1;
     }
     enabled = dump_enabled();
-    if (enabled && f8_down && !f8_was && !dumped && !collecting) {
+    if (enabled && f8_down && !f8_was && !collecting) {
         reset_counters();
         collecting = 1;
         key_collect = 1;
@@ -375,7 +421,6 @@ void object_trace_debug_reset(void) {
     reset_counters();
     collecting = 0;
     key_collect = 0;
-    dumped = 0;
     f8_was = 0;
     force_enabled = -1;
     log_len = 0;
@@ -481,15 +526,37 @@ void object_trace_push(void) {
     memset(g, 0, sizeof(*g));
 }
 
+static int parent_is_bed_slot(void) {
+    Group *parent;
+    int dx;
+    int dy;
+
+    if (open_n <= 0) {
+        return 0;
+    }
+    parent = &open_stack[open_n - 1];
+    if (!parent->has_xy) {
+        return 0;
+    }
+    dx = parent->sx - 301;
+    dy = parent->sy - 156;
+    return dx * dx + dy * dy <= 20 * 20;
+}
+
 void object_trace_pop(void) {
     Group *g;
+    int bed_parent;
 
     if (!collecting || open_n <= 0) {
         return;
     }
     g = &open_stack[--open_n];
+    bed_parent = parent_is_bed_slot();
+    if (bed_parent) {
+        fold_into(&open_stack[open_n - 1], g);
+    }
     if (!g->has_xy) {
-        if (open_n > 0) {
+        if (open_n > 0 && !bed_parent) {
             fold_into(&open_stack[open_n - 1], g);
         }
         return;

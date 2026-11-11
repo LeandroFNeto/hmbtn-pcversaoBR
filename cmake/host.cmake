@@ -117,11 +117,14 @@ hmbtn_host_patch_header(src/main/graphics/anim.h "s32 start[0];" "s32 start[];")
 # farm_area.mode.data, and an area without marked models leaves scene_marked_entries
 # null while their flags are updated. The PS1 reaches its kernel RAM at address 0 there
 # (the write at 0x28 lands in the unused area) and goes on.
+# Entering the outdoor farm loads the shipping bin's picture. The character does not
+# have to hold it or open a shop. Other maps do not load it.
 hmbtn_host_patch(src/overlay/11_GF_FARM/world/scene.c
-    "#include \"scene.h\"" "#include \"scene.h\"\n#include <ps1_null.h>"
+    "#include \"scene.h\"" "#include \"scene.h\"\n#include <ps1_null.h>\n#include <item_art_trace.h>"
     "farm_area.mode.data->head.place" "PS1_NULL_PTR(farm_area.mode.data)->head.place"
     "scene_marked_entries[0]->" "PS1_NULL_PTR(scene_marked_entries[0])->"
-    "scene_marked_entries[1]->" "PS1_NULL_PTR(scene_marked_entries[1])->")
+    "scene_marked_entries[1]->" "PS1_NULL_PTR(scene_marked_entries[1])->"
+    "player_load_winter_anim()" "(player_load_winter_anim(), item_art_keep_for_place(farm_area.mode.place.value))")
 
 # A ground probe that finds nothing leaves ground_hit_primitive() null; these readers do
 # not test it, and on the PS1 they read the kernel's word 3 at address 0 ("no ground").
@@ -143,9 +146,26 @@ hmbtn_host_patch(src/overlay/11_GF_FARM/field/mine.c ${hmbtn_null_include}
 hmbtn_host_patch(src/overlay/11_GF_FARM/people/harvest_sprites.c
     "        action();" "        action(helper);")
 
+# picture_load_to_vram reads the disc when item_art_address returns null. The note records
+# why, for the shipping bin and for a house scene. The lookup and the disc read stay.
+hmbtn_host_patch(src/overlay/11_GF_FARM/picture_cells.c
+    "#include \"picture_cells.h\"" "#include \"picture_cells.h\"\n#include <item_art_trace.h>"
+    "item_art_address(id)" "item_art_note(id, item_art_address(id))")
+
 file(GLOB HMBTN_PORT_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/pc_port/src/*.c)
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/objects_dump.c PROPERTIES COMPILE_FLAGS -Os)
 set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/tmd_vram.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/texture_cache.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/texture_cache_check.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/mods.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/mods_check.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/album_check.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/libgpu.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/vram_check.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/memcard_check.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/audio_ringbuffer.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/audio_worker.c PROPERTIES COMPILE_FLAGS -Os)
+set_source_files_properties(${CMAKE_SOURCE_DIR}/src/pc_port/src/audio_ringbuffer_check.c PROPERTIES COMPILE_FLAGS -Os)
 
 add_executable(hmbtn-host ${HMBTN_PORT_SOURCES} ${HMBTN_GAME_SOURCES})
 
@@ -174,6 +194,13 @@ option(HMBTN_RUN_GAME "Call ps1_main from the host entry" OFF)
 set_property(SOURCE ${CMAKE_SOURCE_DIR}/src/pc_port/src/main_pc.c APPEND PROPERTY
     COMPILE_DEFINITIONS HMBTN_RUN_GAME=$<BOOL:${HMBTN_RUN_GAME}>)
 
+target_link_options(hmbtn-host PRIVATE
+    "-Wl,--wrap=farm_enter_dispatch"
+    "-Wl,--wrap=model_draw"
+    "-Wl,--wrap=model_draw_visible"
+    "-Wl,--wrap=debug_hook_run"
+    "-Wl,--wrap=ClearImage"
+    "-Wl,--wrap=ClearImage2")
 target_link_libraries(hmbtn-host PRIVATE SDL2::SDL2)
 if(WIN32)
     target_link_libraries(hmbtn-host PRIVATE opengl32)

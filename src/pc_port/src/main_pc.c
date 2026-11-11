@@ -38,6 +38,22 @@ int gte_library_self_check(void);
 int object_trace_self_check(void);
 int objects_dump_self_check(void);
 int tmd_vram_self_check(void);
+int item_art_self_check(void);
+int item_picture_self_check(void);
+int bin_sample_self_check(void);
+int mods_self_check(void);
+int model_tex_self_check(void);
+int texture_dump_self_check(void);
+int scenery_self_check(void);
+int bg_trace_self_check(void);
+int album_self_check(void);
+int texture_cache_self_check(void);
+int audio_ringbuffer_self_check(void);
+int force_props_self_check(void);
+int model_art_self_check(void);
+int map_exporter_self_check(void);
+int event_guard_self_check(void);
+void map_export_args(int argc, char **argv);
 
 /* The game spins in CdSearchFile if the archive is missing, so check it first. */
 static int open_disc(void) {
@@ -75,8 +91,7 @@ static void teardown(void) {
 int main(int argc, char *argv[]) {
     const char *selftest;
 
-    (void)argc;
-    (void)argv;
+    map_export_args(argc, argv);
 
     host_log_open("hmbtn-host.log");
     host_install_crash_logger();
@@ -134,7 +149,14 @@ int main(int argc, char *argv[]) {
             if (host_frame_self_check() != 0 || vram_self_check() != 0 || input_self_check() != 0 ||
                 audio_self_check() != 0 || seq_self_check() != 0 || cd_drive_self_check() != 0 ||
                 memcard_self_check() != 0 || farm_tables_self_check() != 0 || gte_library_self_check() != 0 ||
-                objects_dump_self_check() != 0 || object_trace_self_check() != 0 || tmd_vram_self_check() != 0) {
+                objects_dump_self_check() != 0 || object_trace_self_check() != 0 || tmd_vram_self_check() != 0 ||
+                item_art_self_check() != 0 || item_picture_self_check() != 0 ||
+                bin_sample_self_check() != 0 || mods_self_check() != 0 || model_tex_self_check() != 0 ||
+                texture_dump_self_check() != 0 ||
+                scenery_self_check() != 0 || bg_trace_self_check() != 0 || album_self_check() != 0 ||
+                texture_cache_self_check() != 0 ||
+                audio_ringbuffer_self_check() != 0 || force_props_self_check() != 0 || model_art_self_check() != 0 ||
+                map_exporter_self_check() != 0 || event_guard_self_check() != 0) {
                 teardown();
                 return 1;
             }

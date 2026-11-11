@@ -261,8 +261,15 @@ static void mul_rot(const int v[3]) {
     }
 }
 
+/* The game's gte.h encodes RTV0 as 0x4A480012: rotation * V0 + TR. */
 void gte_h_rtv0(void) {
-    mul_rot(vin[0]);
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        mac[i] = (int)(((int64_t)tr[i] * 4096 + (int64_t)rot[i][0] * vin[0][0] +
+                        (int64_t)rot[i][1] * vin[0][1] + (int64_t)rot[i][2] * vin[0][2]) >> 12);
+        ir[i] = clamp_s16(mac[i]);
+    }
 }
 
 void gte_h_rtir(void) {
